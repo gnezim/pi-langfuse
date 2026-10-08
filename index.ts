@@ -37,6 +37,7 @@ import {
   finishGenerationFromMessage,
   createFallbackGenerationFromTurn,
   recordTTFT,
+  recordGenerationIdentity,
 } from "./src/handlers/generation.js";
 import {
   startToolObservation,
@@ -145,11 +146,16 @@ export default async function (pi: ExtensionAPI) {
   }));
 
   pi.on("before_provider_request", async (event, ctx) => withSession(ctx, async () => {
-    await startGeneration(asRecord(event));
+    await recordSystemState(ctx, pi.getActiveTools(), false);
+    await startGeneration(asRecord(event), ctx.model);
   }));
 
   pi.on("after_provider_response", async (event, ctx) => withSession(ctx, async () => {
     updateGenerationMetadata(asRecord(event));
+  }));
+
+  pi.on("provider_stream_event", (event, ctx) => withSession(ctx, () => {
+    recordGenerationIdentity(asRecord(event));
   }));
 
   pi.on("message_update", async (event, ctx) => withSession(ctx, async () => {

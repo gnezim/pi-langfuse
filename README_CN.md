@@ -254,10 +254,16 @@ pi list
 - 该会话中的每个用户提示词都会生成一个独立 trace。
 - trace 中会包含 Pi 实际显示的最终助手回复。
 - 工具执行会以工具观察节点展示参数、结果和错误状态。
+  Pi 1.0 的嵌套调用（含 codemode 内部工具）按 `parentToolCallId` 建立父子关系。
+  工具自身的模型用量和费用记录在子级 `tool-usage` generation 中，不会重复上报 transcript 中包含
+  后代工具的合计用量。Pi 的工具 usage 未标识每个内部模型，因此这些聚合节点不推断模型名称或价格。
 - 模型请求会以生成观察节点展示；如果提供商暴露相关信息，还会包含用量和成本。
   开启 `PI_LANGFUSE_SPLIT_REASONING_TOKENS` 后，推理 token 会作为独立用量桶上报。
+  虚拟模型路由分别记录 `selectedModel`/`selectedProvider` 和 `actualModel`/`actualProvider`；
+  获得实际模型身份后，generation 的 model 和 `provider` 元数据使用实际值。
 - Pi 0.86 的 transcript-aware system/tool 状态会作为 `system-state` 事件上报；generation 会引用有效的
   prompt/tool 状态指纹、活动工具数、更新传输方式和缓存命中率。
+  每次 provider 请求前都会刷新状态，覆盖工具延迟加载；同一 attempt 内的未变化状态不会重复生成事件。
 - 自动重试会归入 `agent-attempt` span，trace 会持续到 `agent_settled` 才结束。
 - cache warming 决策及持久化的 `cache_warm` 用量会被记录；若 warming 发生时没有活动的用户请求 trace，
   会创建按相同 session 分组的独立 trace。

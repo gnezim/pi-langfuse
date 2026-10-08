@@ -133,6 +133,7 @@ export interface ToolState {
   ended: boolean;
   startedAt: number;
   inputBytes: number;
+  parentToolCallId?: string;
 }
 
 export interface AgentState {

@@ -14,6 +14,7 @@ import {
   extractModelParameters,
   extractCacheMetrics,
   inferToolUpdateTransport,
+  extractModelIdentity,
 } from "../utils.js";
 import type { GenerationState, ObservationUpdate } from "../types.js";
 import { applyCapturePolicy } from "../capture-policy.js";
@@ -34,7 +35,7 @@ export function getOpenGeneration(): GenerationState | undefined {
   return undefined;
 }
 
-export async function startGeneration(event: Record<string, unknown>) {
+export async function startGeneration(event: Record<string, unknown>, selectedModel?: unknown) {
   if (state.isTracingDisabled || !state.agentState?.root) {
     return;
   }
@@ -43,11 +44,16 @@ export async function startGeneration(event: Record<string, unknown>) {
     const key = getRequestKey(event, `generation-${++state.agentState.generationSeq}`);
     const payload = getProviderPayload(event);
     const modelParameters = extractModelParameters(payload);
-    const model = String(event.model ?? event.modelId ?? state.currentModel ?? "");
-    const provider = String(event.provider ?? state.currentProvider ?? "");
+    const selected = extractModelIdentity(selectedModel ?? state.currentModel, selectedModel ? undefined : state.currentProvider);
+    const payloadModel = payload && typeof payload === "object" ? (payload as Record<string, unknown>).model : undefined;
+    const actual = extractModelIdentity(event.model ?? event.modelId ?? payloadModel, event.provider);
     const toolUpdateTransport = inferToolUpdateTransport(payload, (state.agentState.systemStateSequence ?? 0) > 1);
     const metadata = shapePayload({
-      provider,
+      provider: actual.provider ?? selected.provider,
+      selectedModel: selected.model,
+      selectedProvider: selected.provider,
+      actualModel: actual.model,
+      actualProvider: actual.provider,
       requestId: key,
       url: event.url,
       method: event.method,
@@ -81,7 +87,7 @@ export async function startGeneration(event: Record<string, unknown>) {
       name: "llm-generation",
       body: {
         input: captured.input,
-        model: model || undefined,
+        model: actual.model ?? selected.model,
         modelParameters,
         metadata: captured.metadata,
       },
@@ -172,6 +178,21 @@ export function recordTTFT(event: Record<string, unknown>) {
   }
 }
 
+/** Routing identity is available before the assistant message, including failed streams. */
+export function recordGenerationIdentity(event: Record<string, unknown>) {
+  const generation = getOpenGeneration();
+  if (!generation) return;
+  const actual = extractModelIdentity(event.model, event.provider);
+  if (!actual.model && !actual.provider) return;
+  if (generation.metadata.actualModel === actual.model && generation.metadata.actualProvider === actual.provider) return;
+  generation.metadata = applyCapturePolicy({ metadata: shapePayload({
+    ...generation.metadata,
+    ...(actual.model ? { actualModel: actual.model } : {}),
+    ...(actual.provider ? { provider: actual.provider, actualProvider: actual.provider } : {}),
+  }) as Record<string, unknown> }, getCapturePolicy()).metadata ?? {};
+  generation.observation.update({ model: actual.model, metadata: generation.metadata });
+}
+
 export async function finishGenerationFromMessage(event: Record<string, unknown>) {
   if (state.isTracingDisabled || !state.agentState) {
     return;
@@ -196,15 +217,17 @@ export async function finishGenerationFromMessage(event: Record<string, unknown>
   const costDetails = extractCostDetails({ ...event, message });
   const cacheMetrics = extractCacheMetrics({ ...event, message });
   const modelParameters = extractModelParameters(getProviderPayload(event)) ?? generation.modelParameters;
-  const model = String(message.model ?? event.model ?? state.currentModel ?? "");
+  const actual = extractModelIdentity(message.model ?? event.model, message.provider ?? event.provider);
   const update: ObservationUpdate = {
     output,
-    model: model || undefined,
+    model: actual.model ?? (generation.metadata.actualModel as string | undefined) ?? (state.currentModel || undefined),
     modelParameters,
     usageDetails,
     ...(costDetails ? { costDetails } : {}),
     metadata: {
       ...generation.metadata,
+      ...(actual.model ? { actualModel: actual.model } : {}),
+      ...(actual.provider ? { provider: actual.provider, actualProvider: actual.provider } : {}),
       finishReason: message.finishReason ?? message.stopReason ?? event.finishReason,
       ...cacheMetrics,
     },
@@ -235,13 +258,17 @@ export async function createFallbackGenerationFromTurn(event: Record<string, unk
     const costDetails = extractCostDetails({ ...event, message });
     const cacheMetrics = extractCacheMetrics({ ...event, message });
     const modelParameters = extractModelParameters(getProviderPayload(event));
-    const model = String(message.model ?? event.model ?? state.currentModel ?? "");
+    const actual = extractModelIdentity(message.model ?? event.model, message.provider ?? event.provider);
     const captured = applyCapturePolicy(
       {
         input: state.agentState.promptInput,
         output: extractAssistantOutput(message),
         metadata: {
-          provider: state.currentProvider || undefined,
+          provider: actual.provider ?? (state.currentProvider || undefined),
+          selectedModel: state.currentModel || undefined,
+          selectedProvider: state.currentProvider || undefined,
+          actualModel: actual.model,
+          actualProvider: actual.provider,
           sourceEvent: "turn_end",
           promptStateHash: state.agentState.promptStateHash,
           toolStateHash: state.agentState.toolStateHash,
@@ -260,7 +287,7 @@ export async function createFallbackGenerationFromTurn(event: Record<string, unk
       body: {
         input: captured.input,
         output: captured.output,
-        model: model || undefined,
+        model: actual.model ?? (state.currentModel || undefined),
         modelParameters,
         usageDetails,
         ...(costDetails ? { costDetails } : {}),

@@ -11,6 +11,7 @@ import {
   estimatePayloadBytes,
   getCapturePolicy,
   getLimits,
+  extractToolUsage,
 } from "../utils.js";
 import { applyCapturePolicy, redactOptionsFor } from "../capture-policy.js";
 import { redactString } from "../redaction.js";
@@ -27,17 +28,19 @@ export async function startToolObservation(event: Record<string, unknown>) {
 
   try {
     const toolName = getToolName(event);
+    const parentToolCallId = typeof event.parentToolCallId === "string" ? event.parentToolCallId : undefined;
     const toolInput = getToolInput(event);
     const shapedInput = shapePayload(toolInput, { maxString: getLimits().maxToolPayload });
     const captured = applyCapturePolicy(
       {
         toolInput: shapedInput,
-        metadata: { toolName, toolCallId },
+        metadata: shapePayload({ toolName, toolCallId, parentToolCallId }) as Record<string, unknown>,
       },
       getCapturePolicy(),
     );
     const inputBytes = estimatePayloadBytes(captured.toolInput, getLimits().maxToolPayload);
-    const parent = state.agentState.activeTurn ?? state.agentState.activeAttempt ?? state.agentState.root;
+    const parentTool = parentToolCallId ? state.agentState.activeTools.get(parentToolCallId) : undefined;
+    const parent = parentTool?.observation ?? state.agentState.activeTurn ?? state.agentState.activeAttempt ?? state.agentState.root;
     const tool = await startChildObservation({
       parent,
       runtime: getRuntime,
@@ -56,6 +59,7 @@ export async function startToolObservation(event: Record<string, unknown>) {
       ended: false,
       startedAt: Date.now(),
       inputBytes,
+      parentToolCallId,
     });
   } catch (e) {
     console.warn("📊 Langfuse: Failed to start tool observation", e);
@@ -76,6 +80,8 @@ export async function finishToolObservation(event: Record<string, unknown>) {
   if (!activeTool || activeTool.ended) {
     return;
   }
+  // Claim completion before creating the usage child (which awaits the runtime).
+  activeTool.ended = true;
 
   const isError = Boolean(event.isError ?? event.error ?? event.status === "error");
   const output =
@@ -92,16 +98,46 @@ export async function finishToolObservation(event: Record<string, unknown>) {
     const captured = applyCapturePolicy(
       {
         toolOutput: shapedOutput,
-        metadata: {
+        metadata: shapePayload({
           toolName: activeTool.toolName,
           toolCallId,
+          parentToolCallId: activeTool.parentToolCallId,
           isError,
-        },
+        }) as Record<string, unknown>,
       },
       policy,
     );
     const outputBytes = estimatePayloadBytes(captured.toolOutput, getLimits().maxToolPayload);
     const durationMs = Math.max(0, Date.now() - activeTool.startedAt);
+
+    // Pi's tool_result and tool_execution_end carry only this tool's own usage.
+    // Do not consume transcript toolResult usage, which includes all descendants.
+    // A separate generation makes this cost visible on Langfuse versions that
+    // only account for usage/cost on generation observations.
+    const { usageDetails, costDetails } = extractToolUsage(event);
+    if (usageDetails || costDetails) {
+      try {
+        const usage = await startChildObservation({
+          parent: activeTool.observation,
+          runtime: getRuntime,
+          name: "tool-usage",
+          body: {
+            usageDetails,
+            costDetails,
+            metadata: applyCapturePolicy({ metadata: shapePayload({
+              toolName: activeTool.toolName,
+              toolCallId,
+              parentToolCallId: activeTool.parentToolCallId,
+              usageSource: "tool-result",
+            }) as Record<string, unknown> }, policy).metadata,
+          },
+          asType: "generation",
+        });
+        usage.end();
+      } catch (error) {
+        console.warn("📊 Langfuse: Failed to record tool usage", error);
+      }
+    }
 
     activeTool.observation
       .update({
@@ -118,8 +154,6 @@ export async function finishToolObservation(event: Record<string, unknown>) {
         },
       })
       .end();
-    activeTool.ended = true;
-
     if (isError) {
       state.errorCount++;
       await sendScore("tool_is_error", 1, {

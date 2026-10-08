@@ -593,6 +593,29 @@ export function extractCostDetails(messageOrEvent: Record<string, unknown>): Rec
   };
 }
 
+/** Accept both provider model ids and Pi Model objects without serializing the whole model. */
+export function extractModelIdentity(value: unknown, provider?: unknown): { model?: string; provider?: string } {
+  const record = value && typeof value === "object" ? value as Record<string, unknown> : undefined;
+  const model = record?.id ?? record?.model ?? value;
+  const actualProvider = provider ?? record?.provider;
+  return {
+    ...(typeof model === "string" && model ? { model } : {}),
+    ...(typeof actualProvider === "string" && actualProvider ? { provider: actualProvider } : {}),
+  };
+}
+
+/** Tool hooks report own usage; transcript toolResult messages also include descendants' usage. */
+export function extractToolUsage(event: Record<string, unknown>): {
+  usageDetails?: Record<string, number>;
+  costDetails?: Record<string, number>;
+} {
+  const result = event.result && typeof event.result === "object"
+    ? event.result as Record<string, unknown>
+    : {};
+  const source = { usage: event.usage ?? result.usage, cost: event.cost ?? result.cost };
+  return { usageDetails: extractUsage(source), costDetails: extractCostDetails(source) };
+}
+
 export function extractResponseMetadata(event: Record<string, unknown>): Record<string, unknown> {
   return shapePayload(
     {

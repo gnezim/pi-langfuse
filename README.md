@@ -273,10 +273,18 @@ This command makes a timeout-bounded authenticated request to Langfuse and, if i
 - Each user prompt within that session becomes a separate trace.
 - The trace contains the final assistant output shown in Pi.
 - Tool runs appear as tool observations with arguments, results, and error state.
+  Pi 1.0 nested calls (including codemode tools) are parented by `parentToolCallId`.
+  A tool's own model usage/cost appears in a child `tool-usage` generation; transcript totals that
+  include descendants are not ingested again. Pi's tool usage does not identify each nested model,
+  so these aggregate generations have no inferred model name or price.
 - LLM requests appear as generation observations, including usage and cost when the provider exposes them.
   Reasoning tokens are reported as their own usage bucket when `PI_LANGFUSE_SPLIT_REASONING_TOKENS` is enabled.
+  Virtual routing preserves `selectedModel`/`selectedProvider` alongside `actualModel`/`actualProvider`;
+  the generation model and `provider` metadata use the actual identity when available.
 - Pi 0.86 transcript-aware prompt/tool state appears as `system-state` events. Generations reference the
   effective prompt/tool state hashes, active tool count, update transport, and cache hit ratio.
+  State is refreshed before every provider request, including after lazy tool loading, and unchanged
+  state is deduplicated within an attempt.
 - Automatic retries are grouped under `agent-attempt` spans and the trace remains open until `agent_settled`.
 - Cache-warming decisions and persisted `cache_warm` usage are reported, including standalone session-grouped
   traces when warming happens while no user-request trace is active.

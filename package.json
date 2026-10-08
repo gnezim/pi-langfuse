@@ -1,6 +1,6 @@
 {
 	"name": "pi-langfuse",
-	"version": "1.6.1",
+	"version": "1.7.0",
 	"description": "Langfuse extension for Pi coding agent",
 	"repository": {
 		"type": "git",
@@ -62,7 +62,7 @@
 		"node": ">=22"
 	},
 	"devDependencies": {
-		"@earendil-works/pi-coding-agent": "^0.86.0",
+		"@earendil-works/pi-coding-agent": "^1.0.0",
 		"tsx": "^4.19.0",
 		"typescript": "^6.0.3"
 	}

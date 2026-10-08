@@ -73,7 +73,7 @@ export function initializeSystemStateTracking(ctx: any): void {
   }
 }
 
-export async function recordSystemState(ctx: any, activeTools: string[]): Promise<void> {
+export async function recordSystemState(ctx: any, activeTools: string[], emitUnchanged = true): Promise<void> {
   const agent = state.agentState;
   if (state.isTracingDisabled || !agent?.root) return;
 
@@ -132,6 +132,9 @@ export async function recordSystemState(ctx: any, activeTools: string[]): Promis
   const isInitial = session.lastPromptStateHash === undefined && session.lastToolStateHash === undefined;
   const changed = isInitial || promptChanged || toolsChanged || systemMessages.length > 0;
   if (changed) session.systemStateSequence++;
+
+  // agent_start emits a snapshot; unchanged request hooks keep the existing reference.
+  if (!changed && !emitUnchanged && agent.systemStateSequence !== undefined) return;
 
   const capturePolicy = getCapturePolicy();
   const rawSystemUpdate = systemMessages.length > 0
