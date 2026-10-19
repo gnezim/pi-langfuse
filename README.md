@@ -11,7 +11,7 @@ Langfuse observability extension for [Pi Coding Agent](https://github.com/earend
 
 - One Langfuse trace per user prompt, grouped by Pi session.
 - Root `agent`, per-request `generation`, and per-tool `tool` observations.
-- Final assistant output capture, tool error visibility, and trace-level scores.
+- Final assistant output capture, generation/tool error visibility, and trace-level scores.
 - Privacy controls for inputs, outputs, tool I/O, system prompt, and cwd.
 - Secret redaction and local path hashing before upload.
 - Capability-gated REST fallback for self-hosted Langfuse setups that expose the legacy trace API when OTel spans arrive but traces do not materialize. Langfuse v4 `events_only` deployments use OTel without legacy fallback ingestion.
@@ -278,6 +278,8 @@ This command makes a timeout-bounded authenticated request to Langfuse and, if i
   include descendants are not ingested again. Pi's tool usage does not identify each nested model,
   so these aggregate generations have no inferred model name or price.
 - LLM requests appear as generation observations, including usage and cost when the provider exposes them.
+  Failed assistant messages are marked `ERROR` with a redacted `statusMessage`, including streaming
+  failures after HTTP 200 and failures without provider hooks. User-aborted generations are `WARNING`.
   Reasoning tokens are reported as their own usage bucket when `PI_LANGFUSE_SPLIT_REASONING_TOKENS` is enabled.
   Virtual routing preserves `selectedModel`/`selectedProvider` alongside `actualModel`/`actualProvider`;
   the generation model and `provider` metadata use the actual identity when available.
@@ -289,7 +291,7 @@ This command makes a timeout-bounded authenticated request to Langfuse and, if i
 - Cache-warming decisions and persisted `cache_warm` usage are reported, including standalone session-grouped
   traces when warming happens while no user-request trace is active.
 - Compaction is recorded as `session-compaction`, with a nested `compaction-summary` generation when usage is available.
-- Trace-level scores include tool counts, tool success rate, and whether the run had errors.
+- Trace-level scores include tool counts, tool success rate, and whether the run had tool errors.
 
 The package also includes a Langfuse CLI skill, so Langfuse data can be queried directly from Pi:
 

@@ -2,9 +2,13 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  createFallbackGenerationFromTurn,
   finishGenerationFromMessage,
   startGeneration,
+  updateGenerationMetadata,
 } from "../src/handlers/generation.ts";
+import { createCapturePolicy } from "../src/capture-policy.ts";
+import { extractGenerationStatus } from "../src/utils.ts";
 import {
   clearAllSessionStates,
   setCurrentSession,
@@ -148,4 +152,82 @@ test("generation metadata links the request to system/tool state and reports cac
   assert.equal(child?.updates.at(-1)?.metadata?.cacheHitRatio, 0.8);
   assert.equal(state.agentState.cacheReadTokens, 80);
   assert.equal(state.agentState.uncachedInputTokens, 20);
+});
+
+for (const scenario of [
+  { name: "error after HTTP 200", status: 200, stopReason: "error", level: "ERROR" },
+  { name: "timeout without response headers", stopReason: "error", level: "ERROR" },
+  { name: "fallback error without provider hooks", fallback: true, stopReason: "error", level: "ERROR" },
+  { name: "user abort", stopReason: "aborted", level: "WARNING" },
+  { name: "successful response", stopReason: "stop", level: undefined },
+  { name: "tool call", stopReason: "toolUse", level: undefined },
+  { name: "output limit", stopReason: "length", level: undefined },
+]) {
+  test(`generation status: ${scenario.name}`, async () => {
+    clearAllSessionStates();
+    setCurrentSession("generation-status-test");
+    const root = new FakeObservation();
+    state.agentState = makeAgentState(root);
+    const message = {
+      role: "assistant",
+      stopReason: scenario.stopReason,
+      errorMessage: scenario.level ? "Synthetic provider failure" : undefined,
+      content: [],
+      usage: { input: 10, output: 2, totalTokens: 12 },
+    };
+
+    if (scenario.fallback) {
+      await createFallbackGenerationFromTurn({}, message);
+    } else {
+      await startGeneration({ requestId: "request-status", payload: {} });
+      if (scenario.status) {
+        updateGenerationMetadata({ requestId: "request-status", status: scenario.status });
+      }
+      await finishGenerationFromMessage({ message });
+    }
+
+    const child = root.children[0];
+    const result = { ...child.body, ...child.updates.at(-1) };
+    assert.equal(result.level, scenario.level);
+    assert.equal(result.statusMessage, scenario.level ? message.errorMessage : undefined);
+    assert.equal(result.metadata?.finishReason, scenario.stopReason);
+    assert.equal(result.usageDetails?.output, 2);
+    assert.equal(child.ended, true);
+    const updates = child.updates.length;
+    await finishGenerationFromMessage({ message });
+    assert.equal(child.updates.length, updates, "duplicate message_end must not update an ended generation");
+  });
+}
+
+test("generation errors redact secrets and paths even when output capture is disabled", async () => {
+  clearAllSessionStates();
+  const previousConfig = state.config;
+  state.config = {
+    publicKey: "pk_test", secretKey: "sk_test", host: "https://example.invalid",
+    capturePolicy: createCapturePolicy({ LANGFUSE_PRIVACY_PRESET: "metadata-only" }),
+  };
+  try {
+    const root = new FakeObservation();
+    state.agentState = makeAgentState(root);
+    await startGeneration({ payload: {} });
+    await finishGenerationFromMessage({ message: {
+      role: "assistant", stopReason: "error", content: [],
+      errorMessage: "Request failed: Bearer synthetic-token-123 from /Users/example/private.log",
+    } });
+    const result = root.children[0].updates.at(-1)!;
+    assert.equal(result.level, "ERROR");
+    assert.equal(result.output, undefined);
+    assert.match(result.statusMessage!, /Request failed/);
+    assert.doesNotMatch(result.statusMessage!, /synthetic-token-123|\/Users\/example/);
+  } finally {
+    state.config = previousConfig;
+  }
+});
+
+test("generation status preserves JSON error text and supplies a missing error message", () => {
+  assert.deepEqual(extractGenerationStatus({ stopReason: "error" }), {
+    level: "ERROR", statusMessage: "Generation failed",
+  });
+  const errorMessage = '{"error":"prefill rejected"}';
+  assert.equal(extractGenerationStatus({ stopReason: "error", errorMessage }).statusMessage, errorMessage);
 });

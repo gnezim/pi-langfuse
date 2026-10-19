@@ -15,6 +15,7 @@ import {
   extractCacheMetrics,
   inferToolUpdateTransport,
   extractModelIdentity,
+  extractGenerationStatus,
 } from "../utils.js";
 import type { GenerationState, ObservationUpdate } from "../types.js";
 import { applyCapturePolicy } from "../capture-policy.js";
@@ -219,6 +220,7 @@ export async function finishGenerationFromMessage(event: Record<string, unknown>
   const modelParameters = extractModelParameters(getProviderPayload(event)) ?? generation.modelParameters;
   const actual = extractModelIdentity(message.model ?? event.model, message.provider ?? event.provider);
   const update: ObservationUpdate = {
+    ...extractGenerationStatus(message),
     output,
     model: actual.model ?? (generation.metadata.actualModel as string | undefined) ?? (state.currentModel || undefined),
     modelParameters,
@@ -270,6 +272,7 @@ export async function createFallbackGenerationFromTurn(event: Record<string, unk
           actualModel: actual.model,
           actualProvider: actual.provider,
           sourceEvent: "turn_end",
+          finishReason: message.finishReason ?? message.stopReason ?? event.finishReason,
           promptStateHash: state.agentState.promptStateHash,
           toolStateHash: state.agentState.toolStateHash,
           systemStateSequence: state.agentState.systemStateSequence,
@@ -285,6 +288,7 @@ export async function createFallbackGenerationFromTurn(event: Record<string, unk
       runtime: getRuntime,
       name: "llm-generation",
       body: {
+        ...extractGenerationStatus(message),
         input: captured.input,
         output: captured.output,
         model: actual.model ?? (state.currentModel || undefined),

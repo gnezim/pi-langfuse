@@ -3,6 +3,7 @@ import { getUsageOptions, type UsageOptions } from "./usage-options.js";
 import { createCapturePolicy, redactOptionsFor, type CapturePolicy } from "./capture-policy.js";
 import { redactValue } from "./redaction.js";
 import { state } from "./state.js";
+import type { ObservationUpdate } from "./types.js";
 
 export function getCapturePolicy(): CapturePolicy {
   return state.config?.capturePolicy ?? createCapturePolicy();
@@ -408,6 +409,18 @@ export function extractModelParameters(payload: unknown): Record<string, string 
   }
 
   return Object.keys(params).length > 0 ? params : undefined;
+}
+
+export function extractGenerationStatus(message: Record<string, unknown>): ObservationUpdate {
+  const reason = message.finishReason ?? message.stopReason;
+  if (reason !== "error" && reason !== "aborted") return {};
+
+  return {
+    level: reason === "error" ? "ERROR" : "WARNING",
+    statusMessage: shapePayload(String(
+      message.errorMessage || (reason === "error" ? "Generation failed" : "Generation aborted"),
+    ), { parseJson: false }) as string,
+  };
 }
 
 export function getMessageFromEvent(event: Record<string, unknown>): Record<string, unknown> | undefined {
