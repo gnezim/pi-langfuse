@@ -10,7 +10,30 @@ import {
   inferToolUpdateTransport,
   normalizeContentForLangfuse,
   shapePayload,
+  toStatusMessage,
 } from "../src/utils.ts";
+
+test("toStatusMessage reads text out of wrapped tool results instead of [object Object]", () => {
+  assert.equal(
+    toStatusMessage({ isError: true, content: [{ type: "text", text: "Validation failed: answer required" }] }, 1_000),
+    "Validation failed: answer required",
+  );
+  assert.equal(toStatusMessage({ output: { text: "nested failure" } }, 1_000), "nested failure");
+  assert.equal(toStatusMessage("plain failure", 1_000), "plain failure");
+  assert.equal(
+    toStatusMessage('{"isError":true,"content":[{"type":"text","text":"prefill failed"}]}', 1_000),
+    "prefill failed",
+  );
+  assert.equal(toStatusMessage('{"error":"quota exceeded"}', 1_000), '{"error":"quota exceeded"}');
+  assert.equal(toStatusMessage({ code: 500 }, 1_000), '{"code":500}');
+
+  const circular: Record<string, unknown> = { message: "boom" };
+  circular.self = circular;
+  assert.equal(toStatusMessage(circular, 1_000), "boom");
+  assert.equal(toStatusMessage(new Error("tool exploded"), 1_000), "tool exploded");
+
+  assert.equal(toStatusMessage("x".repeat(20), 5), "xxxxx... [truncated]");
+});
 
 test("inferToolUpdateTransport detects provider-native and collapsed tool updates", () => {
   assert.equal(

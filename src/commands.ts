@@ -226,6 +226,33 @@ function formatStatus(configPath: string, env: Record<string, string | undefined
   ].join("\n");
 }
 
+// Langfuse v4 in events_only mode accepts ingestion but answers the legacy
+// trace/score read APIs with 404, so a successful /projects call says nothing
+// about the read side a dashboard or script depends on. Only v2 observations
+// prove it, and that endpoint needs an explicit time window.
+const READ_PROBE_WINDOW_MS = 6 * 60 * 60 * 1_000;
+
+async function probeReadSurface(host: string, auth: string): Promise<string> {
+  const to = new Date();
+  const from = new Date(to.getTime() - READ_PROBE_WINDOW_MS);
+  const url = `${host}/api/public/v2/observations?fromStartTime=${from.toISOString()}&toStartTime=${to.toISOString()}&limit=1`;
+
+  try {
+    const response = await fetch(url, {
+      headers: {
+        Authorization: `Basic ${auth}`,
+      },
+      signal: AbortSignal.timeout(10_000),
+    });
+
+    return response.ok
+      ? "read: v2 observations ok"
+      : `read: v2 observations HTTP ${response.status} (events_only or an older server)`;
+  } catch (error) {
+    return `read: v2 observations failed: ${error instanceof Error ? error.message : String(error)}`;
+  }
+}
+
 async function checkLangfuseConnectivity(config: Config): Promise<ConnectivityResult> {
   const host = config.host.replace(/\/+$/, "");
   const auth = Buffer.from(`${config.publicKey}:${config.secretKey}`).toString("base64");
@@ -239,7 +266,7 @@ async function checkLangfuseConnectivity(config: Config): Promise<ConnectivityRe
     });
 
     if (response.ok) {
-      return { ok: true, message: `Connected to ${config.host}` };
+      return { ok: true, message: `Connected to ${config.host}; ${await probeReadSurface(host, auth)}` };
     }
 
     return {

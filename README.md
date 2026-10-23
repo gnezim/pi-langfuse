@@ -266,6 +266,9 @@ To verify the Langfuse host and API keys from inside Pi, run:
 ```
 
 This command makes a timeout-bounded authenticated request to Langfuse and, if it succeeds, sends a small test trace.
+The result also reports whether the `v2/observations` read API answers: a project in `events_only` mode accepts
+writes while every legacy read endpoint returns 404, so a successful `projects` call alone proves nothing about
+the read side dashboards and scripts depend on.
 
 ## What Appears in Langfuse
 
@@ -291,6 +294,11 @@ This command makes a timeout-bounded authenticated request to Langfuse and, if i
 - Cache-warming decisions and persisted `cache_warm` usage are reported, including standalone session-grouped
   traces when warming happens while no user-request trace is active.
 - Compaction is recorded as `session-compaction`, with a nested `compaction-summary` generation when usage is available.
+  Both compaction events are recorded even when no agent run is active — recovery compaction often lands after the
+  run settled — and then form their own trace named `pi-session` inside the same session.
+- On Pi versions that emit `session_compact_failed`, failed compactions appear as
+  `session-compaction-failed` events: `ERROR` for failures and `WARNING` for cancellations.
+  Pi reports a cancelling extension as an abort and may omit its original error text.
 - Trace-level scores include tool counts, tool success rate, and whether the run had tool errors.
 
 The package also includes a Langfuse CLI skill, so Langfuse data can be queried directly from Pi:

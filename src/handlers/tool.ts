@@ -7,7 +7,7 @@ import {
   getToolInput,
   shapePayload,
   extractTextContent,
-  truncate,
+  toStatusMessage,
   estimatePayloadBytes,
   getCapturePolicy,
   getLimits,
@@ -144,7 +144,7 @@ export async function finishToolObservation(event: Record<string, unknown>) {
         output: captured.toolOutput,
         level: isError ? "ERROR" : "DEFAULT",
         statusMessage: isError
-          ? redactString(truncate(String(event.error ?? output), 1_000), redactOptionsFor(policy))
+          ? redactString(toStatusMessage(event.error ?? output, 1_000), redactOptionsFor(policy))
           : undefined,
         metadata: {
           ...(captured.metadata ?? {}),

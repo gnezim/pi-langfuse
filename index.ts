@@ -30,7 +30,7 @@ import {
   recordCacheWarmingDecision,
   recordNewUsageEntries,
 } from "./src/handlers/cache.js";
-import { recordSessionCompaction } from "./src/handlers/session.js";
+import { recordSessionCompaction, recordSessionCompactionFailure } from "./src/handlers/session.js";
 import {
   startGeneration,
   updateGenerationMetadata,
@@ -225,6 +225,10 @@ export default async function (pi: ExtensionAPI) {
 
   pi.on("session_compact", async (event, ctx) => withSession(ctx, async () => {
     await recordSessionCompaction(asRecord(event));
+  }));
+
+  pi.on("session_compact_failed", async (event, ctx) => withSession(ctx, async () => {
+    await recordSessionCompactionFailure(asRecord(event));
   }));
 
   pi.on("session_shutdown", async (_event, ctx) => withSession(ctx, async () => {

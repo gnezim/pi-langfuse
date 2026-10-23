@@ -246,7 +246,8 @@ pi list
 /langfuse-test
 ```
 
-该命令会先发起一次带超时的认证请求；认证通过后，再发送一条小的测试 trace。
+该命令会先发起一次带超时的认证请求；认证通过后，再发送一条小的测试 trace。返回结果还会说明
+`v2/observations` 读取接口是否可用：处于 `events_only` 模式的项目接受写入，而旧版读取接口返回 404。
 
 ## 在 Langfuse 中会看到什么
 
@@ -268,6 +269,9 @@ pi list
 - cache warming 决策及持久化的 `cache_warm` 用量会被记录；若 warming 发生时没有活动的用户请求 trace，
   会创建按相同 session 分组的独立 trace。
 - compaction 会记录为 `session-compaction`；若存在摘要用量，则包含 `compaction-summary` generation。
+  即使没有活动的 agent run（恢复性 compaction 常发生在 run 结束之后）也会记录 compaction 事件；
+  此时它们会在同一 session 下形成名为 `pi-session` 的独立 trace。发出 `session_compact_failed` 的 Pi 版本
+  会将失败的 compaction 记为 `session-compaction-failed`：失败为 `ERROR`，取消为 `WARNING`。
 - trace 级别会记录工具调用次数、工具成功率和是否出现错误。
 
 此包还包含一个内置 Langfuse 技能，可直接在 Pi 中查询 Langfuse 数据：

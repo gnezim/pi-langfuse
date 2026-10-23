@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 
 import { createCapturePolicy } from "../src/capture-policy.ts";
 import { recordCacheWarmingDecision, recordNewUsageEntries } from "../src/handlers/cache.ts";
-import { recordSessionCompaction } from "../src/handlers/session.ts";
+import { recordSessionCompaction, recordSessionCompactionFailure } from "../src/handlers/session.ts";
 import { __setRuntimeForTest } from "../src/langfuse.ts";
 import { clearAllSessionStates, getSessionRunState, setCurrentSession, state } from "../src/state.ts";
 import type { AgentState, Config, LangfuseObservation, LangfuseRuntime, ObservationUpdate } from "../src/types.ts";
@@ -42,10 +42,28 @@ function makeAgentState(root: LangfuseObservation): AgentState {
   };
 }
 
-function makeRuntime(): LangfuseRuntime {
+interface FakeRuntime extends LangfuseRuntime {
+  created: FakeObservation[];
+  propagated: Array<Record<string, unknown>>;
+}
+
+let installedRuntime: FakeRuntime;
+
+function makeRuntime(): FakeRuntime {
+  const created: FakeObservation[] = [];
+  const propagated: Array<Record<string, unknown>> = [];
   return {
-    startObservation: (name, body) => new FakeObservation({ ...body, metadata: { ...body?.metadata, name } }),
-    propagateAttributes: (_attributes, fn) => fn(),
+    created,
+    propagated,
+    startObservation: (name, body) => {
+      const observation = new FakeObservation({ ...body, metadata: { ...body?.metadata, name } });
+      created.push(observation);
+      return observation;
+    },
+    propagateAttributes: (attributes, fn) => {
+      propagated.push(attributes as unknown as Record<string, unknown>);
+      return fn();
+    },
     withRootContext: (fn) => fn(),
     scoreClient: {},
   };
@@ -61,7 +79,8 @@ function installTestState(sessionId: string): Config | null {
     host: "https://example.com",
     capturePolicy: createCapturePolicy({ LANGFUSE_PRIVACY_PRESET: "full-debug" }),
   };
-  __setRuntimeForTest(makeRuntime());
+  installedRuntime = makeRuntime();
+  __setRuntimeForTest(installedRuntime);
   return previousConfig;
 }
 
@@ -70,6 +89,38 @@ function restoreTestState(previousConfig: Config | null): void {
   clearAllSessionStates();
   state.config = previousConfig;
 }
+
+test("failed compactions are visible and redact status text even with output capture disabled", async () => {
+  const previousConfig = installTestState("compaction-failure-test");
+  try {
+    state.config!.capturePolicy = createCapturePolicy({ LANGFUSE_PRIVACY_PRESET: "metadata-only" });
+    const root = new FakeObservation();
+    state.agentState = makeAgentState(root);
+    await recordSessionCompactionFailure({
+      reason: "threshold", aborted: false, willRetry: false, fromExtension: false,
+      errorMessage: '{"error":"prefill failed","Authorization":"Bearer secret-value"}',
+    });
+    const event = root.children[0];
+    assert.equal(event?.name, "session-compaction-failed");
+    assert.equal(event?.type, "event");
+    assert.equal(event?.observation.body?.level, "ERROR");
+    assert.equal(typeof event?.observation.body?.statusMessage, "string");
+    assert.match(event!.observation.body!.statusMessage!, /prefill failed/);
+    assert.doesNotMatch(event!.observation.body!.statusMessage!, /secret-value/);
+    assert.equal(event?.observation.body?.metadata?.reason, "threshold");
+    assert.equal(event?.observation.ended, true);
+
+    await recordSessionCompactionFailure({ reason: "manual", aborted: true, willRetry: false });
+    assert.equal(root.children[1]?.observation.body?.level, "WARNING");
+    assert.equal(root.children[1]?.observation.body?.statusMessage, "Compaction cancelled");
+
+    state.isTracingDisabled = true;
+    await recordSessionCompactionFailure({ aborted: false });
+    assert.equal(root.children.length, 2);
+  } finally {
+    restoreTestState(previousConfig);
+  }
+});
 
 test("cache warming decision is an event under the active agent trace", async () => {
   const previousConfig = installTestState("cache-decision-test");
@@ -162,6 +213,40 @@ test("session compaction records checkpoint state and summary generation usage",
     assert.equal(compaction?.children[0]?.name, "compaction-summary");
     assert.equal(compaction?.children[0]?.type, "generation");
     assert.equal(compaction?.children[0]?.observation.body?.usageDetails?.cache_read_input_tokens, 900);
+    assert.equal(compaction?.children[0]?.observation.ended, true);
+    assert.equal(compaction?.ended, true);
+  } finally {
+    restoreTestState(previousConfig);
+  }
+});
+
+test("compaction events survive a settled run and are stamped with the session", async () => {
+  const previousConfig = installTestState("compaction-out-of-run-test");
+  try {
+    state.agentState = null;
+
+    await recordSessionCompactionFailure({ reason: "threshold", aborted: false, willRetry: false, errorMessage: "prefill failed" });
+    await recordSessionCompaction({
+      reason: "manual",
+      compactionEntry: {
+        id: "compact-2",
+        tokensBefore: 90_000,
+        summary: "Earlier work summary",
+        usage: { input: 10, output: 5, totalTokens: 15 },
+      },
+    });
+
+    assert.equal(installedRuntime.propagated.length, 2);
+    assert.equal(installedRuntime.propagated[0]?.sessionId, "compaction-out-of-run-test");
+    assert.equal(installedRuntime.propagated[0]?.traceName, "pi-session");
+
+    const failure = installedRuntime.created[0];
+    assert.equal(failure?.ended, true);
+    assert.equal(failure?.body?.level, "ERROR");
+    assert.match(String(failure?.body?.statusMessage), /prefill failed/);
+
+    const compaction = installedRuntime.created[1];
+    assert.equal(compaction?.children[0]?.name, "compaction-summary");
     assert.equal(compaction?.children[0]?.observation.ended, true);
     assert.equal(compaction?.ended, true);
   } finally {
