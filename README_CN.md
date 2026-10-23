@@ -247,7 +247,9 @@ pi list
 ```
 
 该命令会先发起一次带超时的认证请求；认证通过后，再发送一条小的测试 trace。返回结果还会说明
-`v2/observations` 读取接口是否可用：处于 `events_only` 模式的项目接受写入，而旧版读取接口返回 404。
+读取接口是否可用：先检查 `v2/observations`，仅当它返回 404 或 405 时回退到旧版 observations API，以兼容旧服务器。
+读取失败会显示警告，但不会阻止发送测试 trace。该检查只验证接口可用性，不保证新 trace 已可查询。
+Langfuse v4 的 `events_only` 模式移除了旧版读取接口；compaction 和错误文本修复本身不要求 v4。
 
 ## 在 Langfuse 中会看到什么
 

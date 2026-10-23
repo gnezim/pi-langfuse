@@ -266,9 +266,10 @@ To verify the Langfuse host and API keys from inside Pi, run:
 ```
 
 This command makes a timeout-bounded authenticated request to Langfuse and, if it succeeds, sends a small test trace.
-The result also reports whether the `v2/observations` read API answers: a project in `events_only` mode accepts
-writes while every legacy read endpoint returns 404, so a successful `projects` call alone proves nothing about
-the read side dashboards and scripts depend on.
+The result also probes the observations read API. It tries `v2/observations` first and falls back to the legacy
+observations API only when v2 returns 404 or 405, so older servers remain supported. Read failures produce a
+warning and do not block the test trace. This checks endpoint availability, not whether the new trace is queryable.
+Langfuse v4 in `events_only` mode removes legacy reads; the compaction and error-text fixes do not require v4.
 
 ## What Appears in Langfuse
 
