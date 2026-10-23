@@ -349,6 +349,28 @@ Earlier versions emitted `git_commit`, branch, remote, owner, repository, and re
 
 Unset `LANGFUSE_CAPTURE_SOURCE_METADATA` to stop collection immediately. Pin `pi-langfuse@1.5.12` only if the old schema is required during migration; doing so also restores its broader default source disclosure.
 
+## Session Lineage
+
+Pi writes the session file a session was forked or spawned from into its header, and the extension reads it through `sessionManager.getHeader()`. Every observation of such a derived session then carries:
+
+```json
+{
+  "parentSessionId": "01a1639b-58c5-729a-8315-f17b045ccd28",
+  "sessionKind": "fork"
+}
+```
+
+`sessionKind` is `subagent` when the process runs under `pi-subagents` (`PI_SUBAGENT_CHILD=1`) and `fork` otherwise. That environment flag is a `pi-subagents` implementation detail, not a contract this package owns: a child process that loses it is labelled `fork`, and only the label degrades — the parent link itself comes from the session header and stays exact.
+
+Sessions remain separate in Langfuse, because Langfuse has no session-to-session relation. Correlate through metadata instead, for example after resolving a child session id:
+
+```bash
+curl -s -u "$LANGFUSE_PUBLIC_KEY:$LANGFUSE_SECRET_KEY" \
+  "$LANGFUSE_HOST/api/public/v2/observations?sessionId=<child-session-id>&fields=core,metadata"
+```
+
+Root sessions carry neither key. Only the parent session id is read; the parent transcript is never opened beyond the header line that names it.
+
 ## Troubleshooting
 
 ### No traces appearing?

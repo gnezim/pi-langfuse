@@ -323,6 +323,28 @@ export OTEL_RESOURCE_ATTRIBUTES="service.version=1.2.3,vcs.repository.name=publi
 
 取消设置 `LANGFUSE_CAPTURE_SOURCE_METADATA` 可立即停止采集。迁移期间只有在必须保留旧 schema 时才固定到 `pi-langfuse@1.5.12`；这样也会恢复旧版本更宽泛的默认源码披露。
 
+## 会话血缘
+
+Pi 会把派生会话的来源文件写入会话头，扩展通过 `sessionManager.getHeader()` 读取它。这类派生会话的所有 observation 都会携带：
+
+```json
+{
+  "parentSessionId": "01a1639b-58c5-729a-8315-f17b045ccd28",
+  "sessionKind": "fork"
+}
+```
+
+当进程在 `pi-subagents` 下运行时（`PI_SUBAGENT_CHILD=1`）`sessionKind` 为 `subagent`，否则为 `fork`。该环境变量是 `pi-subagents` 的实现细节，不是本包持有的契约：子进程丢失该变量时只会标成 `fork`，即只有标签会降级——父链接本身取自会话头，始终是精确的。
+
+Langfuse 中没有会话与会话的关联关系，因此会话仍然彼此独立，只能通过 metadata 关联。解析出子会话 id 后例如：
+
+```bash
+curl -s -u "$LANGFUSE_PUBLIC_KEY:$LANGFUSE_SECRET_KEY" \
+  "$LANGFUSE_HOST/api/public/v2/observations?sessionId=<child-session-id>&fields=core,metadata"
+```
+
+根会话不携带这两个键。扩展只读取父会话 id，除指明该 id 的首行外不会打开父会话转录。
+
 ## 故障排除
 
 ### 没有看到 trace

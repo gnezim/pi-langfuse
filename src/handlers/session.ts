@@ -2,6 +2,7 @@ import { applyCapturePolicy } from "../capture-policy.js";
 import { getRuntime } from "../langfuse.js";
 import { startChildObservation, startSessionObservation } from "../observation.js";
 import { state } from "../state.js";
+import { sessionLineageMetadata } from "../session-lineage.js";
 import {
   extractCostDetails,
   extractGenerationStatus,
@@ -39,7 +40,7 @@ function startCompactionObservation(
       sessionId: state.currentSessionId ? truncate(state.currentSessionId, 200) : undefined,
       userId: state.config?.userId,
       traceName: SESSION_TRACE_NAME,
-      metadata: { piScope: "session" },
+      metadata: { piScope: "session", ...sessionLineageMetadata() },
     },
   });
 }
