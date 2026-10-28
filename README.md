@@ -371,7 +371,7 @@ Pi writes the session file a session was forked or spawned from into its header,
 }
 ```
 
-`sessionKind` is `subagent` when the process runs under `pi-subagents` (`PI_SUBAGENT_CHILD=1`) and `fork` otherwise. That environment flag is a `pi-subagents` implementation detail, not a contract this package owns: a child process that loses it is labelled `fork`, and only the label degrades — the parent link itself comes from the session header and stays exact.
+`sessionKind` is `subagent` when `pi-subagents` sets `PI_SUBAGENT_CHILD=1` and `fork` otherwise. That environment flag is a `pi-subagents` implementation detail, not a contract this package owns. Foreground children may omit it and receive the `fork` label; the parent link still comes from the session header. Normal parent UUIDs remain exact, while custom IDs pass through secret and path redaction before upload, including standalone traces.
 
 Sessions remain separate in Langfuse, because Langfuse has no session-to-session relation. Correlate through metadata instead, for example after resolving a child session id:
 

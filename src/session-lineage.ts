@@ -1,6 +1,7 @@
 import { closeSync, openSync, readSync } from "node:fs";
 import { basename } from "node:path";
 import { getSessionRunState } from "./state.js";
+import { redactString } from "./redaction.js";
 
 export interface SessionLineage {
   parentSessionId?: string;
@@ -88,7 +89,7 @@ export function sessionLineageMetadata(sessionManager?: unknown): Record<string,
   const sessionState = getSessionRunState();
   const metadata: Record<string, string> = {};
   if (sessionState.parentSessionId) {
-    metadata.parentSessionId = sessionState.parentSessionId;
+    metadata.parentSessionId = redactString(sessionState.parentSessionId);
   }
   if (sessionState.sessionKind) {
     metadata.sessionKind = sessionState.sessionKind;

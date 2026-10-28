@@ -1,5 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { createCapturePolicy } from "../src/capture-policy.ts";
 import { recordCacheWarmingDecision, recordNewUsageEntries } from "../src/handlers/cache.ts";
@@ -137,6 +140,32 @@ test("native compaction prefixes do not expose JSON credentials", async () => {
     assert.match(status!, /quota exceeded/);
     assert.doesNotMatch(status!, /synthetic-private-value|synthetic-password/);
   } finally {
+    restoreTestState(previousConfig);
+  }
+});
+
+test("standalone traces mask sensitive custom parent IDs", async () => {
+  const previousConfig = installTestState("custom-parent-id");
+  const dir = mkdtempSync(join(tmpdir(), "pi-langfuse-custom-parent-"));
+  try {
+    state.config!.capturePolicy = createCapturePolicy({ LANGFUSE_PRIVACY_PRESET: "metadata-only" });
+    const parentSession = join(dir, "session.jsonl");
+    writeFileSync(parentSession, JSON.stringify({ type: "session", id: "sk-lf-synthetic-review-value" }) + "\n");
+    const ctx = { sessionManager: {
+      getHeader: () => ({ parentSession }),
+      getEntries: () => [{ type: "usage", id: "custom-parent-cache", kind: "cache_warm", usage: { input: 2 } }],
+    } };
+    await recordCacheWarmingDecision({ action: "warm" }, ctx);
+    await recordNewUsageEntries(ctx);
+    await recordSessionCompactionFailure({ errorMessage: "Synthetic failure" });
+    assert.equal(installedRuntime.propagated.length, 3);
+    for (const attributes of installedRuntime.propagated) {
+      const metadata = attributes.metadata as Record<string, string>;
+      assert.equal(metadata.parentSessionId, "[REDACTED_SECRET]");
+      assert.equal(metadata.sessionKind, "fork");
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
     restoreTestState(previousConfig);
   }
 });
