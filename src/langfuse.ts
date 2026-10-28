@@ -54,7 +54,7 @@ interface RestFallbackObservation {
 }
 
 interface RestFallbackStore {
-  trace?: RestFallbackTrace;
+  traces: Map<string, RestFallbackTrace>;
   observations: RestFallbackObservation[];
   observationById: Map<string, RestFallbackObservation>;
   attempted: boolean;
@@ -443,15 +443,16 @@ function applyObservationUpdate(record: RestFallbackObservation, body: Record<st
   if (completionStartTime) record.completionStartTime = completionStartTime;
 }
 
-function applyTraceUpdate(store: RestFallbackStore, body: Record<string, unknown> | undefined) {
-  if (!store.trace || !body) {
+function applyTraceUpdate(store: RestFallbackStore, traceId: string, body: Record<string, unknown> | undefined) {
+  const trace = store.traces.get(traceId);
+  if (!trace || !body) {
     return;
   }
 
-  if ("input" in body) store.trace.input = body.input;
-  if ("output" in body) store.trace.output = body.output;
+  if ("input" in body) trace.input = body.input;
+  if ("output" in body) trace.output = body.output;
   if ("metadata" in body && body.metadata && typeof body.metadata === "object") {
-    store.trace.metadata = mergeMetadata(store.trace.metadata, body.metadata as Record<string, unknown>);
+    trace.metadata = mergeMetadata(trace.metadata, body.metadata as Record<string, unknown>);
   }
 }
 
@@ -542,7 +543,7 @@ function wrapObservation(
   parentObservationId?: string,
 ): any {
   const id = observation.id || randomUUID();
-  const traceId = observation.traceId || store.trace?.id || randomUUID();
+  const traceId = observation.traceId || randomUUID();
   const metadata = body?.metadata && typeof body.metadata === "object" ? body.metadata as Record<string, unknown> : undefined;
   const record: RestFallbackObservation = {
     id,
@@ -558,18 +559,18 @@ function wrapObservation(
   store.observations.push(record);
   store.observationById.set(id, record);
 
-  if (!parentObservationId && !store.trace) {
+  if (!parentObservationId && !store.traces.has(traceId)) {
     const propagated = readPropagatedAttributes(observation);
-    store.trace = {
+    store.traces.set(traceId, {
       id: traceId,
       timestamp: record.startTime,
-      name,
+      name: propagated.traceName ?? name,
       input: body?.input,
       sessionId: propagated.sessionId
         ?? (typeof metadata?.sessionId === "string" ? metadata.sessionId : state.currentSessionId || undefined),
       userId: propagated.userId ?? state.config?.userId,
-      metadata,
-    };
+      metadata: mergeMetadata(propagated.metadata, metadata),
+    });
   }
 
   return {
@@ -579,7 +580,7 @@ function wrapObservation(
     update(updateBody?: Record<string, unknown>) {
       applyObservationUpdate(record, updateBody);
       if (!parentObservationId) {
-        applyTraceUpdate(store, updateBody);
+        applyTraceUpdate(store, traceId, updateBody);
       }
       const updated = observation.update(updateBody);
       return updated === observation ? this : updated;
@@ -588,7 +589,7 @@ function wrapObservation(
       if (endBody && typeof endBody === "object") {
         applyObservationUpdate(record, endBody);
         if (!parentObservationId) {
-          applyTraceUpdate(store, endBody);
+          applyTraceUpdate(store, traceId, endBody);
         }
       }
       record.endTime = nowIso();
@@ -611,7 +612,7 @@ function wrapObservation(
       return wrapObservation(child, store, childName, childBody, options?.asType, id);
     },
     setTraceIO(traceBody?: { input?: unknown; output?: unknown }) {
-      applyTraceUpdate(store, traceBody);
+      applyTraceUpdate(store, traceId, traceBody);
       return observation.setTraceIO?.(traceBody);
     },
   };
@@ -694,22 +695,18 @@ async function getTraceVisibility(
 async function waitForTraceVisibility(
   rt: LangfuseRuntime,
   store: RestFallbackStore,
-  traceId: string,
   signal: AbortSignal,
-): Promise<TraceVisibility> {
+): Promise<RestFallbackTrace[]> {
   const deadline = Date.now() + OTEL_VISIBILITY_TIMEOUT_MS;
+  const missing = new Map(store.traces);
 
   while (true) {
-    const visibility = await getTraceVisibility(rt, store, traceId, signal);
-    if (visibility !== "missing") {
-      return visibility;
+    for (const traceId of missing.keys()) {
+      const visibility = await getTraceVisibility(rt, store, traceId, signal);
+      if (visibility !== "missing") missing.delete(traceId);
     }
-
     const remainingMs = deadline - Date.now();
-    if (remainingMs <= 0) {
-      return "missing";
-    }
-
+    if (missing.size === 0 || remainingMs <= 0) return [...missing.values()];
     await delay(Math.min(OTEL_VISIBILITY_POLL_INTERVAL_MS, remainingMs), signal);
   }
 }
@@ -720,40 +717,21 @@ function eventTimestamp(record: { endTime?: string; startTime?: string; timestam
 
 async function fallbackToRestIngestion(rt: LangfuseRuntime, signal: AbortSignal) {
   const store = rt.restFallback as RestFallbackStore | undefined;
-  if (!store?.trace || store.attempted) {
-    return;
-  }
+  if (!store?.traces.size || store.attempted) return;
   store.attempted = true;
 
-  const visibility = await waitForTraceVisibility(rt, store, store.trace.id, signal);
-  if (visibility === "visible") {
-    return;
-  }
-  if (visibility !== "missing") {
-    debugLog(`📊 Langfuse: Skipped REST fallback; trace visibility is ${visibility}`);
-    return;
-  }
-
-  const trace = store.trace;
-  const entries: any[] = [
-    {
-      type: "trace-create",
-      id: randomUUID(),
-      timestamp: eventTimestamp(trace),
-      body: {
-        id: trace.id,
-        timestamp: trace.timestamp,
-        name: trace.name,
-        input: trace.input,
-        output: trace.output,
-        sessionId: trace.sessionId,
-        userId: trace.userId,
-        metadata: trace.metadata,
-      },
-    },
-  ];
+  const traces = await waitForTraceVisibility(rt, store, signal);
+  if (traces.length === 0) return;
+  const missingIds = new Set(traces.map(trace => trace.id));
+  const entries: any[] = traces.map(trace => ({
+    type: "trace-create",
+    id: randomUUID(),
+    timestamp: eventTimestamp(trace),
+    body: { ...trace },
+  }));
 
   for (const observation of store.observations) {
+    if (!missingIds.has(observation.traceId)) continue;
     const body = {
       id: observation.id,
       traceId: observation.traceId,
@@ -815,7 +793,7 @@ async function fallbackToRestIngestion(rt: LangfuseRuntime, signal: AbortSignal)
     console.warn("📊 Langfuse: REST fallback ingestion reported errors", errors);
   } else {
     debugLog(
-      `📊 Langfuse: OTel trace ${trace.id} was not visible; wrote fallback trace via REST ingestion (${chunks.length} chunk(s))`,
+      `📊 Langfuse: Restored ${traces.length} missing trace(s) via REST ingestion (${chunks.length} chunk(s))`,
     );
   }
 }
@@ -853,6 +831,7 @@ export async function getRuntime(): Promise<LangfuseRuntime> {
     ]);
 
     const restFallback: RestFallbackStore = {
+      traces: new Map(),
       observations: [],
       observationById: new Map(),
       attempted: false,

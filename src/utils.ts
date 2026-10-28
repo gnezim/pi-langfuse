@@ -62,6 +62,10 @@ export function shapePayload(
     }
 
     if (typeof item === "string") {
+      // Truncated JSON loses field names needed for secret redaction.
+      if (options.parseJson !== false && /^[\s]*[\[{]/.test(item) && item.length > maxString) {
+        return PAYLOAD_TOO_LARGE;
+      }
       const truncated = truncate(item, maxString);
       if (options.parseJson === false) {
         return truncated;
@@ -190,8 +194,10 @@ export function extractTextContent(content: unknown, maxLength?: number, depth =
   const text = content
     .map((item) => {
       if (!item || typeof item !== "object") return "";
-      const block = item as { type?: string; text?: string; thinking?: string };
-      return block.type === "text" && block.text ? block.text : "";
+      const block = item as { type?: string; text?: unknown };
+      return block.type === "text" && block.text
+        ? typeof block.text === "string" ? block.text : safeSerialize(block.text, maxLength)
+        : "";
     })
     .filter(Boolean)
     .join("\n");
@@ -206,34 +212,22 @@ export function extractTextContent(content: unknown, maxLength?: number, depth =
 /**
  * Human-readable text for an observation `statusMessage`: text blocks first, then
  * the string, then JSON, so a structured error never lands as "[object Object]"
- * or as a wall of escaped JSON. Redaction stays with the caller.
+ * or as a wall of escaped JSON. Shape and redact before extracting any text.
  */
 export function toStatusMessage(value: unknown, maxLength = 1_000): string {
-  if (typeof value === "string") {
-    // Providers often hand the whole content block array over as a JSON string.
-    const parsed = tryParseJson(value);
-    const nested = parsed === value ? undefined : extractTextContent(parsed, maxLength);
-    return truncate(nested ?? value, maxLength);
-  }
-
-  const text = extractTextContent(value, maxLength);
+  const shaped = shapePayload(value instanceof Error ? value.message || String(value) : value, { maxString: maxLength });
+  const text = extractTextContent(shaped, maxLength);
   if (text) {
     return text;
   }
-
-  // JSON.stringify(Error) is "{}", so an Error falls back to its message.
-  if (value instanceof Error) {
-    return truncate(value.message || String(value), maxLength);
+  const message = (shaped as { message?: unknown } | null)?.message;
+  if (typeof message === "string" && message) {
+    return truncate(message, maxLength);
   }
-
   try {
-    const json = JSON.stringify(value);
-    return json ? truncate(json, maxLength) : truncate(String(value), maxLength);
+    return truncate(JSON.stringify(shaped) ?? String(shaped), maxLength);
   } catch {
-    // Circular payloads (common in MCP error objects) cannot be serialised; the
-    // message field is the next best thing to show in the UI.
-    const message = (value as { message?: unknown } | null)?.message;
-    return truncate(typeof message === "string" && message ? message : String(value), maxLength);
+    return "[unserializable error]";
   }
 }
 
@@ -467,10 +461,10 @@ export function extractGenerationStatus(message: Record<string, unknown>): Obser
 
   return {
     level: reason === "error" ? "ERROR" : "WARNING",
-    statusMessage: shapePayload(toStatusMessage(
+    statusMessage: toStatusMessage(
       message.errorMessage || (reason === "error" ? "Generation failed" : "Generation aborted"),
       getLimits().maxString,
-    ), { parseJson: false }) as string,
+    ),
   };
 }
 

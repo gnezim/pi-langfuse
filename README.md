@@ -165,6 +165,10 @@ defaults shown above. To capture a very large system prompt or big tool
 payloads in full, raise or disable the relevant limit (e.g.
 `PI_LANGFUSE_MAX_STRING_LENGTH=off`).
 
+JSON strings above the string limit are replaced with `[payload too large]` rather
+than cut into invalid JSON that could bypass sensitive-field redaction. Error
+status text uses the same shaping and redaction limits, even when IO capture is disabled.
+
 The REST fallback ingestion is chunked so each request body stays well below
 the Langfuse gateway's payload limit (~4.5MB). These knobs control the chunk
 budget and a hard ceiling for the whole fallback payload:
@@ -177,6 +181,8 @@ export PI_LANGFUSE_MAX_FALLBACK_TOTAL_BYTES=33554432  # whole-payload ceiling, d
 
 When the accumulated fallback payload exceeds the 32MB ceiling, ingestion is
 skipped with a warning instead of attempting an unrecoverably large upload.
+Fallback checks each trace separately within one visibility window and restores
+only missing traces, preserving each trace's session, user, name, and metadata.
 
 ### Reasoning tokens
 

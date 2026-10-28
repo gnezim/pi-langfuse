@@ -8,6 +8,7 @@ import {
   updateGenerationMetadata,
 } from "../src/handlers/generation.ts";
 import { createCapturePolicy } from "../src/capture-policy.ts";
+import { closeDanglingObservations } from "../src/handlers/tool.ts";
 import { extractGenerationStatus } from "../src/utils.ts";
 import {
   clearAllSessionStates,
@@ -230,4 +231,49 @@ test("generation status preserves JSON error text and supplies a missing error m
   });
   const errorMessage = '{"error":"prefill rejected"}';
   assert.equal(extractGenerationStatus({ stopReason: "error", errorMessage }).statusMessage, errorMessage);
+});
+
+test("provider errors redact status text before the assistant message arrives", async () => {
+  for (const requestId of [undefined, "provider-error"]) {
+    clearAllSessionStates();
+    const root = new FakeObservation();
+    state.agentState = makeAgentState(root);
+    await startGeneration({ requestId: "provider-error", payload: {} });
+    updateGenerationMetadata({ requestId, status: 429, error: "Bearer synthetic-token-123456 from /Users/example/private.log" });
+    const status = root.children[0].updates.at(-1)?.statusMessage;
+    assert.match(status!, /REDACTED_SECRET/);
+    assert.doesNotMatch(status!, /synthetic-token|\/Users\/example/);
+  }
+});
+
+test("HTTP errors retain final assistant diagnostics and usage", async () => {
+  clearAllSessionStates();
+  const root = new FakeObservation();
+  state.agentState = makeAgentState(root);
+  await startGeneration({ requestId: "quota", payload: {} });
+  updateGenerationMetadata({ requestId: "quota", status: 429 });
+  await finishGenerationFromMessage({ message: {
+    role: "assistant", stopReason: "error", content: [],
+    errorMessage: '{"error":"Quota exhausted; retry after 60 seconds","apiKey":"synthetic-private-value"}',
+    usage: { input: 10, output: 2, totalTokens: 12 },
+  } });
+  const generation = root.children[0];
+  const final = generation.updates.at(-1)!;
+  assert.match(final.statusMessage!, /Quota exhausted; retry after 60 seconds/);
+  assert.doesNotMatch(final.statusMessage!, /synthetic-private-value/);
+  assert.equal(final.level, "ERROR");
+  assert.equal(final.metadata?.finishReason, "error");
+  assert.equal(final.usageDetails?.output, 2);
+  assert.equal(generation.ended, true);
+});
+
+test("provider failures remain errors when shutdown closes a missing assistant response", async () => {
+  clearAllSessionStates();
+  const root = new FakeObservation();
+  state.agentState = makeAgentState(root);
+  await startGeneration({ requestId: "failed-request", payload: {} });
+  updateGenerationMetadata({ requestId: "failed-request", status: 500 });
+  closeDanglingObservations("Session shutdown");
+  assert.equal(root.children[0].updates.at(-1)?.level, "ERROR");
+  assert.equal(root.children[0].ended, true);
 });

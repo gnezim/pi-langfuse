@@ -35,6 +35,35 @@ test("toStatusMessage reads text out of wrapped tool results instead of [object 
   assert.equal(toStatusMessage("x".repeat(20), 5), "xxxxx... [truncated]");
 });
 
+test("status text masks sensitive fields before formatting objects and nested JSON", () => {
+  const error = { error: "quota exceeded", apiKey: "synthetic-private-value", password: "synthetic-password" };
+  for (const value of [
+    error,
+    JSON.stringify(error),
+    { content: [{ type: "text", text: JSON.stringify(error) }] },
+    new Error(JSON.stringify(error)),
+  ]) {
+    const status = toStatusMessage(value);
+    assert.match(status, /quota exceeded/);
+    assert.doesNotMatch(status, /synthetic-private-value|synthetic-password/);
+  }
+});
+
+test("status text omits oversized JSON rather than disclosing a truncated secret", () => {
+  const value = JSON.stringify({ password: "synthetic-password", padding: "x".repeat(2_000) });
+  assert.equal(toStatusMessage(value, 100), "[payload too large]");
+});
+
+test("status text respects object traversal limits before serialization", () => {
+  let accessed = 0;
+  const value = Object.create(null);
+  for (let index = 0; index < 10_000; index++) {
+    Object.defineProperty(value, `field${index}`, { enumerable: true, get() { accessed++; return index; } });
+  }
+  toStatusMessage(value);
+  assert.equal(accessed, 80);
+});
+
 test("inferToolUpdateTransport detects provider-native and collapsed tool updates", () => {
   assert.equal(
     inferToolUpdateTransport({ messages: [{ role: "user" }, { type: "tool_addition", name: "write" }] }, true),

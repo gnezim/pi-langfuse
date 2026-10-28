@@ -16,6 +16,7 @@ import {
   inferToolUpdateTransport,
   extractModelIdentity,
   extractGenerationStatus,
+  toStatusMessage,
 } from "../utils.js";
 import type { GenerationState, ObservationUpdate } from "../types.js";
 import { applyCapturePolicy } from "../capture-policy.js";
@@ -115,50 +116,19 @@ export function updateGenerationMetadata(event: Record<string, unknown>) {
 
   const key = getRequestKey(event, "");
   const metadata = applyCapturePolicy({ metadata: extractResponseMetadata(event) }, getCapturePolicy()).metadata ?? {};
-  if (!key) {
-    const generation = getOpenGeneration();
-    if (generation) {
-      generation.metadata = { ...generation.metadata, ...metadata };
-      
-      const isError = 
-        (typeof metadata.status === "number" && metadata.status >= 400) || 
-        event.error || 
-        event.isError;
-        
-      if (isError) {
-        generation.observation.update({ 
-          metadata: generation.metadata,
-          level: "ERROR",
-          statusMessage: String(event.error ?? metadata.statusMessage ?? "Provider request failed")
-        }).end();
-        generation.ended = true;
-      } else {
-        generation.observation.update({ metadata: generation.metadata });
-      }
-    }
-    return;
-  }
+  const generation = (key ? state.agentState.activeGenerations.get(key) : undefined) ?? getOpenGeneration();
+  if (!generation || generation.ended) return;
 
-  const generation = state.agentState.activeGenerations.get(key) ?? getOpenGeneration();
-  if (generation) {
-    generation.metadata = { ...generation.metadata, ...metadata };
-    
-    const isError = 
-      (typeof metadata.status === "number" && metadata.status >= 400) || 
-      event.error || 
-      event.isError;
-      
-    if (isError) {
-      generation.observation.update({ 
-        metadata: generation.metadata,
-        level: "ERROR",
-        statusMessage: String(event.error ?? metadata.statusMessage ?? "Provider request failed")
-      }).end();
-      generation.ended = true;
-    } else {
-      generation.observation.update({ metadata: generation.metadata });
-    }
+  generation.metadata = { ...generation.metadata, ...metadata };
+  const isError = (typeof metadata.status === "number" && metadata.status >= 400) || event.error || event.isError;
+  if (isError) {
+    generation.errorStatus = {
+      level: "ERROR",
+      statusMessage: toStatusMessage(event.error ?? metadata.statusMessage ?? "Provider request failed"),
+    };
   }
+  // The assistant message supplies final error details and usage; close there.
+  generation.observation.update({ metadata: generation.metadata, ...generation.errorStatus });
 }
 
 export function recordTTFT(event: Record<string, unknown>) {

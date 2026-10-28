@@ -98,7 +98,7 @@ test("failed compactions are visible and redact status text even with output cap
     state.agentState = makeAgentState(root);
     await recordSessionCompactionFailure({
       reason: "threshold", aborted: false, willRetry: false, fromExtension: false,
-      errorMessage: '{"error":"prefill failed","Authorization":"Bearer secret-value"}',
+      errorMessage: '{"error":"prefill failed","Authorization":"Bearer secret-value","apiKey":"synthetic-private-value","password":"synthetic-password"}',
     });
     const event = root.children[0];
     assert.equal(event?.name, "session-compaction-failed");
@@ -106,7 +106,7 @@ test("failed compactions are visible and redact status text even with output cap
     assert.equal(event?.observation.body?.level, "ERROR");
     assert.equal(typeof event?.observation.body?.statusMessage, "string");
     assert.match(event!.observation.body!.statusMessage!, /prefill failed/);
-    assert.doesNotMatch(event!.observation.body!.statusMessage!, /secret-value/);
+    assert.doesNotMatch(event!.observation.body!.statusMessage!, /secret-value|synthetic-private-value|synthetic-password/);
     assert.equal(event?.observation.body?.metadata?.reason, "threshold");
     assert.equal(event?.observation.ended, true);
 

@@ -98,6 +98,22 @@ test("execution-end-only usage is captured and missing parents fall back to the 
   assert.equal(turn.children[0].children[0].body.costDetails?.total, 0.03);
 }));
 
+test("structured tool errors stay redacted with tool IO disabled", async () => withState(async () => {
+  const root = new Observation();
+  state.agentState = agent(root);
+  await startToolObservation({ toolCallId: "failed-tool", toolName: "synthetic" });
+  await finishToolObservation({
+    toolCallId: "failed-tool", isError: true,
+    error: { error: "quota exceeded", apiKey: "synthetic-private-value", password: "synthetic-password" },
+  });
+  const tool = root.children[0];
+  assert.equal(tool.body.output, undefined);
+  assert.equal(tool.body.level, "ERROR");
+  assert.match(tool.body.statusMessage!, /quota exceeded/);
+  assert.doesNotMatch(tool.body.statusMessage!, /synthetic-private-value|synthetic-password/);
+  assert.equal(tool.endCount, 1);
+}));
+
 test("virtual routing separates selected and actual identities across requests and fallback", async () => withState(async () => {
   const root = new Observation();
   state.agentState = agent(root);

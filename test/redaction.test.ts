@@ -141,3 +141,10 @@ test("redacts camelCase credential field names", () => {
     },
   });
 });
+
+test("private key fragments stay masked when truncation removes the PEM footer", () => {
+  const pem = "-----BEGIN PRIVATE KEY-----\n" + "synthetic-private-fragment\n".repeat(100) + "-----END PRIVATE KEY-----";
+  assert.equal(redactString(pem, { maxStringLength: 100 }), "[REDACTED_SECRET]");
+  assert.equal(shapePayload(pem, { maxString: 100 }), "[REDACTED_SECRET]");
+  assert.equal(redactString(pem.split("-----END")[0]), "[REDACTED_SECRET]");
+});
