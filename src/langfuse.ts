@@ -275,7 +275,8 @@ function serializedBytes(value: unknown): number {
 
 /**
  * Split an ingestion event list into chunks whose serialized request bodies each
- * stay under `maxBytes`. Each chunk, when wrapped as `{ batch: chunk }`, matches
+ * stay under `maxBytes`, skipping individually oversized events with a warning.
+ * Each chunk, when wrapped as `{ batch: chunk }`, matches
  * the measurement exactly because entries are serialized individually and joined
  * with single commas inside the `{"batch":[...]}` envelope.
  */
@@ -288,6 +289,12 @@ export function splitIngestionBatch(entries: unknown[], maxBytes: number): unkno
 
   for (let index = 0; index < serialized.length; index++) {
     const entryBytes = Buffer.byteLength(serialized[index], "utf8");
+    if (envelopeBytes + entryBytes > maxBytes) {
+      const message = `Skipping oversized REST fallback event (${envelopeBytes + entryBytes} bytes exceeds ${maxBytes}-byte request budget)`;
+      rememberRuntimeError("REST fallback ingestion", new Error(message));
+      console.warn(`📊 Langfuse: ${message}`);
+      continue;
+    }
     const separators = chunk.length > 0 ? 1 : 0;
     const projectedBytes = chunkBytes + entryBytes + separators;
     if (chunk.length > 0 && projectedBytes > maxBytes) {
@@ -809,7 +816,7 @@ async function fallbackToRestIngestion(rt: LangfuseRuntime, signal: AbortSignal,
     console.warn("📊 Langfuse: REST fallback ingestion reported errors", errors);
   } else {
     debugLog(
-      `📊 Langfuse: Restored ${traces.length} missing trace(s) via REST ingestion (${chunks.length} chunk(s))`,
+      `📊 Langfuse: Processed ${traces.length} missing trace(s) via REST ingestion (${chunks.length} chunk(s))`,
     );
   }
 }
@@ -845,6 +852,9 @@ export async function getRuntime(): Promise<LangfuseRuntime> {
       import("@langfuse/tracing"),
       import("@langfuse/client"),
     ]);
+
+    // Another caller may have initialized it while the shared imports loaded.
+    if (runtime) return runtime;
 
     const restFallback: RestFallbackStore = {
       traces: new Map(),

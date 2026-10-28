@@ -117,6 +117,27 @@ test("registers OTel context propagation for Langfuse trace attributes", async (
   }
 });
 
+test("concurrent first callers share one runtime and one SDK shutdown", async () => {
+  const previousConfig = state.config;
+  state.config = { publicKey: "pk_test", secretKey: "sk_test", host: "https://example.invalid" };
+  __setRuntimeForTest(null);
+  const runtimes = await Promise.all([getRuntime(), getRuntime()]);
+  try {
+    assert.equal(runtimes[0], runtimes[1]);
+    let shutdowns = 0;
+    const provider = runtimes[0].tracerProvider!;
+    const shutdown = provider.shutdown!.bind(provider);
+    provider.shutdown = async () => { shutdowns++; await shutdown(); };
+    await forceShutdownRuntime();
+    assert.equal(shutdowns, 1);
+  } finally {
+    await forceShutdownRuntime();
+    for (const rt of new Set(runtimes)) await rt.tracerProvider?.shutdown?.();
+    __setRuntimeForTest(null);
+    state.config = previousConfig;
+  }
+});
+
 test("force shutdown does not hang when Langfuse SDK shutdown stalls", async () => {
   const runtime = {
     startObservation: (() => {

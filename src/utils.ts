@@ -1,7 +1,7 @@
 import { getLimits } from "./limits.js";
 import { getUsageOptions, type UsageOptions } from "./usage-options.js";
 import { createCapturePolicy, redactOptionsFor, type CapturePolicy } from "./capture-policy.js";
-import { redactValue } from "./redaction.js";
+import { hasSensitiveJsonField, redactValue } from "./redaction.js";
 import { state } from "./state.js";
 import type { ObservationUpdate } from "./types.js";
 
@@ -82,6 +82,10 @@ export function shapePayload(
       const candidate = jsonStart > 0 ? truncated.slice(jsonStart) : truncated;
       const parsed = tryParseJson(candidate);
       if (parsed === candidate) {
+        // Native tool suffixes and bracketed prefixes can make JSON unparseable.
+        if (options.redact !== false && (
+          (options.parseJsonPrefix && /[\[{]\s*"/.test(truncated)) || hasSensitiveJsonField(truncated)
+        )) return "[unparseable error payload]";
         return truncated;
       }
       const shaped = visit(parsed, remainingDepth - 1, seen);

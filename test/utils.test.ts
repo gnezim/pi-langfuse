@@ -56,6 +56,31 @@ test("status text omits oversized JSON rather than disclosing a truncated secret
   assert.equal(toStatusMessage(value, 100), "[payload too large]");
 });
 
+test("status text with JSON and surrounding diagnostics fails closed", () => {
+  for (const value of [
+    '[provider] {"token":"synthetic-token-value"}',
+    '{"token":"synthetic-token-value"}\n\nCommand exited with code 1',
+    'HTTP 400: {"password":"synthetic-token-value"} (request failed)',
+    'HTTP 400: {"password":"synthetic-token-value"',
+  ]) {
+    assert.equal(toStatusMessage(value), "[unparseable error payload]");
+  }
+  assert.equal(toStatusMessage("[provider] connection failed"), "[provider] connection failed");
+});
+
+test("replayed tool errors cannot expose JSON secrets in the next provider payload", () => {
+  for (const text of [
+    '{"token":"synthetic-token-value"}\n\nCommand exited with code 1',
+    '[provider] {"password":"synthetic-token-value"}',
+    'HTTP 400: {"pa\\u0073sword":"synthetic-token-value"} (request failed)',
+  ]) {
+    const payload = { messages: [{ role: "tool", content: text }] };
+    assert.doesNotMatch(JSON.stringify(shapePayload(payload)), /synthetic-token-value/);
+  }
+  const ordinary = 'Example {"answer":42} followed by explanation';
+  assert.equal(shapePayload(ordinary), ordinary);
+});
+
 test("prefixed error shaping stays bounded without changing ordinary text capture", () => {
   const json = JSON.stringify({ password: "synthetic-password", padding: "x".repeat(2_000) });
   assert.equal(toStatusMessage(`Compaction failed: ${json}`, 100), "[payload too large]");

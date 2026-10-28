@@ -93,7 +93,7 @@ export async function finishToolObservation(event: Record<string, unknown>) {
 
   try {
     const policy = getCapturePolicy();
-    const shapedOutput = shapePayload(output, { maxString: getLimits().maxToolPayload });
+    const shapedOutput = shapePayload(output, { maxString: getLimits().maxToolPayload, parseJsonPrefix: isError });
     const captured = applyCapturePolicy(
       {
         toolOutput: shapedOutput,

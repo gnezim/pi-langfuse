@@ -114,6 +114,22 @@ test("structured tool errors stay redacted with tool IO disabled", async () => w
   assert.equal(tool.endCount, 1);
 }));
 
+test("native shell error suffixes cannot expose JSON secrets in status or tool output", async () => withState(async () => {
+  for (const preset of ["metadata-only", "full-debug"]) {
+    state.config!.capturePolicy = createCapturePolicy({ LANGFUSE_PRIVACY_PRESET: preset });
+    const root = new Observation();
+    state.agentState = agent(root);
+    await startToolObservation({ toolCallId: "shell-error", toolName: "bash" });
+    await finishToolObservation({ toolCallId: "shell-error", isError: true, content: [
+      { type: "text", text: '{"token":"synthetic-token-value"}\n\nCommand exited with code 1' },
+    ] });
+    const body = root.children[0].body;
+    assert.equal(body.level, "ERROR");
+    assert.equal(body.statusMessage, "[unparseable error payload]");
+    assert.equal(body.output, preset === "metadata-only" ? undefined : "[unparseable error payload]");
+  }
+}));
+
 test("virtual routing separates selected and actual identities across requests and fallback", async () => withState(async () => {
   const root = new Observation();
   state.agentState = agent(root);
