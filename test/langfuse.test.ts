@@ -206,11 +206,11 @@ test("shutdown treats a fallback deadline abort as expected control flow", async
       host: "https://example.com",
     },
     restFallback: {
-      trace: {
+      traces: new Map([["slow-trace", {
         id: "slow-trace",
         timestamp: new Date().toISOString(),
         name: "pi-agent",
-      },
+      }]]),
       observations: [],
       observationById: new Map(),
       attempted: false,
@@ -255,11 +255,11 @@ test("shutdown completes primary cleanup before best-effort REST fallback", asyn
       host: "https://example.com",
     },
     restFallback: {
-      trace: {
+      traces: new Map([["ordered-trace", {
         id: "ordered-trace",
         timestamp: new Date().toISOString(),
         name: "pi-agent",
-      },
+      }]]),
       observations: [],
       observationById: new Map(),
       attempted: false,
@@ -894,11 +894,11 @@ test("REST fallback skips legacy ingestion when the legacy trace API is unavaila
       host: "https://example.com",
     },
     restFallback: {
-      trace: {
+      traces: new Map([["v4-trace", {
         id: "v4-trace",
         timestamp: new Date().toISOString(),
         name: "pi-agent",
-      },
+      }]]),
       observations: [],
       observationById: new Map(),
       attempted: false,
@@ -934,11 +934,11 @@ test("REST fallback fails closed when legacy API capability is ambiguous", async
       host: "https://example.com",
     },
     restFallback: {
-      trace: {
+      traces: new Map([["ambiguous-trace", {
         id: "ambiguous-trace",
         timestamp: new Date().toISOString(),
         name: "pi-agent",
-      },
+      }]]),
       observations: [],
       observationById: new Map(),
       attempted: false,
@@ -975,11 +975,11 @@ test("REST fallback stops after a trace is visible", async () => {
       host: "https://example.com",
     },
     restFallback: {
-      trace: {
+      traces: new Map([["visible-trace", {
         id: "visible-trace",
         timestamp: new Date().toISOString(),
         name: "pi-agent",
-      },
+      }]]),
       observations: [],
       observationById: new Map(),
       attempted: false,
@@ -1021,12 +1021,12 @@ test("REST fallback checks legacy API capability and ingests a missing trace", a
       host: "https://example.com",
     },
     restFallback: {
-      trace: {
+      traces: new Map([["fallback-trace", {
         id: "fallback-trace",
         timestamp: new Date().toISOString(),
         name: "pi-agent",
         userId: "user-123",
-      },
+      }]]),
       observations: [],
       observationById: new Map(),
       attempted: false,
@@ -1089,11 +1089,11 @@ test("REST fallback splits oversized ingestion payloads into byte-bounded batche
       host: "https://example.com",
     },
     restFallback: {
-      trace: {
+      traces: new Map([["oversized-trace", {
         id: "oversized-trace",
         timestamp: new Date().toISOString(),
         name: "pi-agent",
-      },
+      }]]),
       observations: Array.from({ length: 8 }, (_, index) => ({
         id: `obs-${index}`,
         traceId: "oversized-trace",
@@ -1175,11 +1175,11 @@ test("REST fallback warns and skips ingestion when the total payload exceeds the
       host: "https://example.com",
     },
     restFallback: {
-      trace: {
+      traces: new Map([["oversized-trace", {
         id: "oversized-trace",
         timestamp: new Date().toISOString(),
         name: "pi-agent",
-      },
+      }]]),
       observations: Array.from({ length: 3 }, (_, index) => ({
         id: `obs-${index}`,
         traceId: "oversized-trace",

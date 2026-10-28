@@ -13,8 +13,7 @@ import {
   getLimits,
   extractToolUsage,
 } from "../utils.js";
-import { applyCapturePolicy, redactOptionsFor } from "../capture-policy.js";
-import { redactString } from "../redaction.js";
+import { applyCapturePolicy } from "../capture-policy.js";
 
 export async function startToolObservation(event: Record<string, unknown>) {
   if (state.isTracingDisabled || !state.agentState?.root) {
@@ -144,7 +143,7 @@ export async function finishToolObservation(event: Record<string, unknown>) {
         output: captured.toolOutput,
         level: isError ? "ERROR" : "DEFAULT",
         statusMessage: isError
-          ? redactString(toStatusMessage(event.error ?? output, 1_000), redactOptionsFor(policy))
+          ? toStatusMessage(event.error ?? output, 1_000)
           : undefined,
         metadata: {
           ...(captured.metadata ?? {}),
@@ -184,7 +183,7 @@ export function closeDanglingObservations(statusMessage: string) {
 
   for (const generation of state.agentState.activeGenerations.values()) {
     if (!generation.ended) {
-      generation.observation.update({ level: "WARNING", statusMessage, metadata: { ...generation.metadata, cancelled: true } }).end();
+      generation.observation.update({ level: "WARNING", statusMessage, ...generation.errorStatus, metadata: { ...generation.metadata, cancelled: true } }).end();
       generation.ended = true;
     }
   }
