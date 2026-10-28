@@ -12,6 +12,8 @@ import {
   shapePayload,
   toStatusMessage,
 } from "../src/utils.ts";
+import { state } from "../src/state.ts";
+import { DEFAULT_LIMITS } from "../src/limits.ts";
 
 test("toStatusMessage reads text out of wrapped tool results instead of [object Object]", () => {
   assert.equal(
@@ -62,6 +64,24 @@ test("status text respects object traversal limits before serialization", () => 
   }
   toStatusMessage(value);
   assert.equal(accessed, 80);
+});
+
+test("status text honors a smaller configured string limit", () => {
+  const previousConfig = state.config;
+  state.config = { publicKey: "pk_test", secretKey: "sk_test", host: "https://example.invalid",
+    limits: { ...DEFAULT_LIMITS, maxString: 40 } };
+  try {
+    assert.equal(toStatusMessage("x".repeat(500), 1_000), "x".repeat(40) + "... [truncated]");
+  } finally { state.config = previousConfig; }
+});
+
+test("nested Error messages and their stack copies cannot disclose JSON credentials", () => {
+  const error = new Error(JSON.stringify({ error: "quota exceeded", apiKey: "synthetic-private-value", password: "synthetic-password" }));
+  for (const value of [{ error }, { content: [{ type: "text", text: error }] }]) {
+    const status = toStatusMessage(value);
+    assert.match(status, /quota exceeded/);
+    assert.doesNotMatch(status, /synthetic-private-value|synthetic-password/);
+  }
 });
 
 test("inferToolUpdateTransport detects provider-native and collapsed tool updates", () => {

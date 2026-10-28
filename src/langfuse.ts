@@ -698,15 +698,26 @@ async function waitForTraceVisibility(
   signal: AbortSignal,
 ): Promise<RestFallbackTrace[]> {
   const deadline = Date.now() + OTEL_VISIBILITY_TIMEOUT_MS;
-  const missing = new Map(store.traces);
+  const pending = new Map(store.traces);
+  const missing = new Set<string>();
 
   while (true) {
-    for (const traceId of missing.keys()) {
-      const visibility = await getTraceVisibility(rt, store, traceId, signal);
-      if (visibility !== "missing") missing.delete(traceId);
+    const ids = [...pending.keys()];
+    // Bound read concurrency and stop polling in time to send the REST batch.
+    for (let index = 0; index < ids.length && Date.now() < deadline; index += 4) {
+      const readSignal = AbortSignal.any([signal, AbortSignal.timeout(Math.max(1, deadline - Date.now()))]);
+      await Promise.all(ids.slice(index, index + 4).map(async traceId => {
+        try {
+          const visibility = await getTraceVisibility(rt, store, traceId, readSignal);
+          if (visibility === "missing") missing.add(traceId);
+          else { pending.delete(traceId); missing.delete(traceId); }
+        } catch (error) {
+          if (signal.aborted || !readSignal.aborted) throw error;
+        }
+      }));
     }
     const remainingMs = deadline - Date.now();
-    if (missing.size === 0 || remainingMs <= 0) return [...missing.values()];
+    if (pending.size === 0 || remainingMs <= 0) return [...pending.values()].filter(trace => missing.has(trace.id));
     await delay(Math.min(OTEL_VISIBILITY_POLL_INTERVAL_MS, remainingMs), signal);
   }
 }

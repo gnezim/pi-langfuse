@@ -1005,6 +1005,39 @@ test("REST fallback stops after a trace is visible", async () => {
   }
 });
 
+test("REST fallback leaves time to ingest multiple traces when read responses are slow", async () => {
+  const originalFetch = globalThis.fetch;
+  const restored: string[] = [];
+  const traces = Array.from({ length: 12 }, (_, index) => ({
+    id: `slow-trace-${index}`, timestamp: new Date().toISOString(), name: "pi-session",
+  }));
+  const runtime = createTestRuntime({
+    runtimeConfig: { publicKey: "pk_test", secretKey: "sk_test", host: "https://example.invalid" },
+    restFallback: { traces: new Map(traces.map(trace => [trace.id, trace])), observations: [], observationById: new Map(), attempted: false },
+  });
+  globalThis.fetch = async (input, init) => {
+    await new Promise<void>((resolve, reject) => {
+      init?.signal?.throwIfAborted();
+      const aborted = () => { clearTimeout(timer); reject(new DOMException("Aborted", "AbortError")); };
+      const timer = setTimeout(() => { init?.signal?.removeEventListener("abort", aborted); resolve(); }, 180);
+      init?.signal?.addEventListener("abort", aborted, { once: true });
+    });
+    if (init?.method === "POST") {
+      restored.push(...JSON.parse(String(init.body)).batch.filter((entry: any) => entry.type === "trace-create").map((entry: any) => entry.body.id));
+      return new Response('{"errors":[]}', { status: 200 });
+    }
+    return new Response("{}", { status: String(input).endsWith("?limit=1") ? 200 : 404 });
+  };
+  try {
+    __setRuntimeForTest(runtime);
+    await forceShutdownRuntime();
+    assert.deepEqual(restored.sort(), traces.map(trace => trace.id).sort());
+  } finally {
+    __setRuntimeForTest(null);
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("REST fallback checks legacy API capability and ingests a missing trace", async () => {
   const requests: Array<{ method: string; url: string; body?: string }> = [];
   const runtime = {
