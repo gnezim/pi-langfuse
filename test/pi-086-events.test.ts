@@ -253,3 +253,37 @@ test("compaction events survive a settled run and are stamped with the session",
     restoreTestState(previousConfig);
   }
 });
+
+for (const withRootContext of [true, false]) {
+  test(`idle child cache traces retain lineage and usage (root context: ${withRootContext})`, async () => {
+    const previousConfig = installTestState("idle-child");
+    const previousChildFlag = process.env.PI_SUBAGENT_CHILD;
+    process.env.PI_SUBAGENT_CHILD = "1";
+    try {
+      if (!withRootContext) installedRuntime.withRootContext = undefined;
+      const parentId = "01a1639b-58c5-729a-8315-f17b045ccd28";
+      const ctx = {
+        isIdle: () => true,
+        sessionManager: {
+          getHeader: () => ({ parentSession: `/nonexistent/${parentId}.jsonl` }),
+          getEntries: () => [{ type: "usage", id: "idle-usage", kind: "cache_warm",
+            usage: { input: 10, output: 2 }, cost: { total: 0.03 } }],
+        },
+      };
+      await recordCacheWarmingDecision({ action: "warm" }, ctx);
+      await recordNewUsageEntries(ctx);
+      await recordNewUsageEntries(ctx);
+      assert.equal(installedRuntime.created.length, 2);
+      for (const attributes of installedRuntime.propagated) {
+        assert.equal(attributes.sessionId, "idle-child");
+        assert.deepEqual(attributes.metadata, { parentSessionId: parentId, sessionKind: "subagent" });
+      }
+      assert.equal(installedRuntime.created[1].body?.usageDetails?.input, 10);
+      assert.equal(installedRuntime.created[1].body?.costDetails?.total, 0.03);
+    } finally {
+      if (previousChildFlag === undefined) delete process.env.PI_SUBAGENT_CHILD;
+      else process.env.PI_SUBAGENT_CHILD = previousChildFlag;
+      restoreTestState(previousConfig);
+    }
+  });
+}

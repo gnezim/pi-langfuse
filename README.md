@@ -376,6 +376,8 @@ curl -s -u "$LANGFUSE_PUBLIC_KEY:$LANGFUSE_SECRET_KEY" \
 ```
 
 Root sessions carry neither key. Only the parent session id is read; the parent transcript is never opened beyond the header line that names it.
+Standalone compaction and idle cache-warming traces retain these links, including
+cache-warming usage and costs, through both OTel export and REST fallback.
 
 ## Troubleshooting
 

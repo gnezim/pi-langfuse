@@ -5,6 +5,7 @@ import { LangfuseSpanProcessor } from "@langfuse/otel";
 import * as tracing from "@langfuse/tracing";
 import { forceShutdownRuntime, getRuntime } from "../src/langfuse.ts";
 import { startSessionObservation } from "../src/observation.ts";
+import { recordCacheWarmingDecision, recordNewUsageEntries } from "../src/handlers/cache.ts";
 import { clearAllSessionStates, state } from "../src/state.ts";
 
 async function withFallback(run: (runtime: Awaited<ReturnType<typeof getRuntime>>, batches: any[][], visible: Set<string>) => Promise<void>) {
@@ -102,4 +103,37 @@ test("REST fallback restores every missing trace within one visibility window", 
     [roots[0].traceId, "first-session", 0, "summary-0"],
     [roots[1].traceId, "second-session", 1, "summary-1"],
   ]);
+}));
+
+test("idle child cache roots retain parent links and costs through REST fallback", async () => withFallback(async (_runtime, batches) => {
+  const previousChildFlag = process.env.PI_SUBAGENT_CHILD;
+  process.env.PI_SUBAGENT_CHILD = "1";
+  try {
+    state.currentSessionId = "idle-child";
+    const parentId = "01a1639b-58c5-729a-8315-f17b045ccd28";
+    const ctx = { isIdle: () => true, sessionManager: {
+      getHeader: () => ({ parentSession: `/nonexistent/${parentId}.jsonl` }),
+      getEntries: () => [{ type: "usage", id: "cache-usage", kind: "cache_warm",
+        usage: { input: 10, output: 2 }, cost: { total: 0.03 } }],
+    } };
+    await recordCacheWarmingDecision({ action: "warm" }, ctx);
+    await recordNewUsageEntries(ctx);
+    await recordNewUsageEntries(ctx);
+    await forceShutdownRuntime();
+    const entries = batches.flat();
+    const traces = entries.filter(entry => entry.type === "trace-create").map(entry => entry.body);
+    assert.equal(traces.length, 2);
+    for (const trace of traces) {
+      assert.equal(trace.sessionId, "idle-child");
+      assert.equal(trace.metadata.parentSessionId, parentId);
+      assert.equal(trace.metadata.sessionKind, "subagent");
+    }
+    const usage = entries.filter(entry => entry.type === "generation-create");
+    assert.equal(usage.length, 1);
+    assert.equal(usage[0].body.costDetails.total, 0.03);
+    assert.equal(usage[0].body.usageDetails.input, 10);
+  } finally {
+    if (previousChildFlag === undefined) delete process.env.PI_SUBAGENT_CHILD;
+    else process.env.PI_SUBAGENT_CHILD = previousChildFlag;
+  }
 }));
