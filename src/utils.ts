@@ -1,7 +1,7 @@
 import { getLimits } from "./limits.js";
 import { getUsageOptions, type UsageOptions } from "./usage-options.js";
 import { createCapturePolicy, redactOptionsFor, type CapturePolicy } from "./capture-policy.js";
-import { hasUnredactedSensitiveJsonField, redactValue } from "./redaction.js";
+import { hasUnredactedSensitiveJsonField, redactString, redactValue } from "./redaction.js";
 import { state } from "./state.js";
 import type { ObservationUpdate } from "./types.js";
 
@@ -77,7 +77,7 @@ export function shapePayload(
       }
       const truncated = truncate(item, maxString);
       if (options.parseJson === false) {
-        return truncated;
+        return options.redact === false ? truncated : redactString(item, redactionOptions);
       }
       const candidate = jsonStart > 0 ? truncated.slice(jsonStart) : truncated;
       const parsed = tryParseJson(candidate);
@@ -86,7 +86,7 @@ export function shapePayload(
         if (options.redact !== false && (
           (options.parseJsonPrefix && /[\[{]\s*"/.test(truncated)) || hasUnredactedSensitiveJsonField(truncated)
         )) return "[unparseable error payload]";
-        return truncated;
+        return options.redact === false ? truncated : redactString(item, redactionOptions);
       }
       const shaped = visit(parsed, remainingDepth - 1, seen);
       if (jsonStart > 0 && truncated.slice(0, jsonStart).trim()) {
