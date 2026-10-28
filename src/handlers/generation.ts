@@ -189,7 +189,11 @@ export async function finishGenerationFromMessage(event: Record<string, unknown>
   const cacheMetrics = extractCacheMetrics({ ...event, message });
   const modelParameters = extractModelParameters(getProviderPayload(event)) ?? generation.modelParameters;
   const actual = extractModelIdentity(message.model ?? event.model, message.provider ?? event.provider);
+  const finishReason = message.finishReason ?? message.stopReason;
   const update: ObservationUpdate = {
+    ...(generation.errorStatus && ["stop", "toolUse", "length"].includes(String(finishReason))
+      ? { level: "DEFAULT" as const, statusMessage: "" }
+      : {}),
     ...extractGenerationStatus(message),
     output,
     model: actual.model ?? (generation.metadata.actualModel as string | undefined) ?? (state.currentModel || undefined),
@@ -200,7 +204,7 @@ export async function finishGenerationFromMessage(event: Record<string, unknown>
       ...generation.metadata,
       ...(actual.model ? { actualModel: actual.model } : {}),
       ...(actual.provider ? { provider: actual.provider, actualProvider: actual.provider } : {}),
-      finishReason: message.finishReason ?? message.stopReason ?? event.finishReason,
+      finishReason: finishReason ?? event.finishReason,
       ...cacheMetrics,
     },
   };

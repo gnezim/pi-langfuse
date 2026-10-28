@@ -7,13 +7,14 @@ import { forceShutdownRuntime, getRuntime } from "../src/langfuse.ts";
 import { startSessionObservation } from "../src/observation.ts";
 import { clearAllSessionStates, state } from "../src/state.ts";
 
-async function withFallback(run: (runtime: Awaited<ReturnType<typeof getRuntime>>, batches: any[][], visible: Set<string>) => Promise<void>) {
+async function withFallback(run: (runtime: Awaited<ReturnType<typeof getRuntime>>, batches: any[][], visible: Set<string>, exportedNames: string[]) => Promise<void>) {
   const previousConfig = state.config;
   const previousProvider = tracing.getLangfuseTracerProvider();
   const originalFetch = globalThis.fetch;
+  const exportedNames: string[] = [];
   const provider = new BasicTracerProvider({ spanProcessors: [new LangfuseSpanProcessor({
     publicKey: "pk_test", secretKey: "sk_test",
-    exporter: { export: (_spans, done) => done({ code: 0 }), shutdown: async () => {}, forceFlush: async () => {} },
+    exporter: { export: (spans, done) => { exportedNames.push(...spans.map(span => span.name)); done({ code: 0 }); }, shutdown: async () => {}, forceFlush: async () => {} },
   })] });
   const batches: any[][] = [];
   const visible = new Set<string>();
@@ -29,9 +30,11 @@ async function withFallback(run: (runtime: Awaited<ReturnType<typeof getRuntime>
     clearAllSessionStates();
     state.config = { publicKey: "pk_test", secretKey: "sk_test", host: "https://example.invalid" };
     const runtime = await getRuntime();
+    await runtime.tracerProvider?.shutdown?.();
+    runtime.tracerProvider = provider;
     // Keep the real SDK and wrapper, but drop OTel spans at the export boundary.
     tracing.setLangfuseTracerProvider(provider);
-    await run(runtime, batches, visible);
+    await run(runtime, batches, visible, exportedNames);
   } finally {
     await forceShutdownRuntime();
     await provider.shutdown();
@@ -41,6 +44,24 @@ async function withFallback(run: (runtime: Awaited<ReturnType<typeof getRuntime>
     globalThis.fetch = originalFetch;
   }
 }
+
+test("observations keep their exporter across another session's SDK lifecycle", async () => withFallback(async (runtime, _batches, _visible, exportedNames) => {
+  const root = runtime.startObservation("owner-root", {}, { asType: "span" });
+  const foreignProvider = new BasicTracerProvider();
+  try {
+    tracing.setLangfuseTracerProvider(foreignProvider);
+    root.startObservation!("owner-during-child", {}, { asType: "span" }).end();
+    await foreignProvider.shutdown();
+    tracing.setLangfuseTracerProvider(null);
+    root.startObservation!("owner-after-child", {}, { asType: "span" }).end();
+    runtime.startObservation("owner-next-root", {}, { asType: "span" }).end();
+    root.end();
+    await forceShutdownRuntime();
+    assert.deepEqual(exportedNames.sort(), ["owner-after-child", "owner-during-child", "owner-next-root", "owner-root"]);
+  } finally {
+    await foreignProvider.shutdown();
+  }
+}));
 
 test("REST fallback preserves standalone session trace attributes", async () => withFallback(async (runtime, batches) => {
   const observation = await startSessionObservation({
@@ -62,6 +83,19 @@ test("REST fallback preserves standalone session trace attributes", async () => 
   assert.equal(trace?.metadata.parentSessionId, "parent-session");
   assert.equal(trace?.metadata.sessionKind, "subagent");
   assert.equal(trace?.metadata.reason, "manual");
+}));
+
+test("REST fallback retains ingestion time after a slow SDK flush", async () => withFallback(async (runtime, batches) => {
+  runtime.tracerProvider!.forceFlush = () => new Promise(resolve => setTimeout(resolve, 700));
+  const root = await startSessionObservation({
+    runtime: async () => runtime, name: "session-compaction", asType: "span",
+    attributes: { sessionId: "slow-flush-session", traceName: "pi-session" },
+  });
+  root.end();
+  await forceShutdownRuntime();
+  const restored = batches.flat().find(entry => entry.type === "trace-create")?.body;
+  assert.equal(restored?.id, root.traceId);
+  assert.equal(restored?.sessionId, "slow-flush-session");
 }));
 
 test("REST fallback restores a missing later trace even when the first is visible", async () => withFallback(async (runtime, batches, visible) => {

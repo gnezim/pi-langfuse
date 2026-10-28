@@ -277,3 +277,25 @@ test("provider failures remain errors when shutdown closes a missing assistant r
   assert.equal(root.children[0].updates.at(-1)?.level, "ERROR");
   assert.equal(root.children[0].ended, true);
 });
+
+test("a recovered provider retry takes the final assistant status", async () => {
+  for (const stopReason of ["stop", "toolUse", "length", "error", "aborted"]) {
+    clearAllSessionStates();
+    const root = new FakeObservation();
+    state.agentState = makeAgentState(root);
+    await startGeneration({ payload: {} });
+    updateGenerationMetadata({ status: 429 });
+    updateGenerationMetadata({ status: 200 });
+    await finishGenerationFromMessage({ message: {
+      role: "assistant", stopReason, content: [],
+      errorMessage: stopReason === "error" ? "Stream failed after retry" : undefined,
+      usage: { input: 10, output: 2, totalTokens: 12 },
+    } });
+    const generation = root.children[0];
+    const final = Object.assign({}, generation.body, ...generation.updates);
+    assert.equal(final.level, stopReason === "error" ? "ERROR" : stopReason === "aborted" ? "WARNING" : "DEFAULT");
+    assert.notEqual(final.statusMessage, "Provider request failed");
+    assert.equal(final.usageDetails?.output, 2);
+    assert.equal(generation.ended, true);
+  }
+});

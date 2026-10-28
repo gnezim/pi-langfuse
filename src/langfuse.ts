@@ -54,6 +54,7 @@ interface RestFallbackObservation {
 }
 
 interface RestFallbackStore {
+  withTracerProvider?: <T>(fn: () => T) => T;
   traces: Map<string, RestFallbackTrace>;
   observations: RestFallbackObservation[];
   observationById: Map<string, RestFallbackObservation>;
@@ -603,9 +604,10 @@ function wrapObservation(
       }
       const propagate = runtime?.propagateAttributes;
       const createChild = () => observation.startObservation(childName, childBody, options);
+      const createOwnedChild = () => store.withTracerProvider ? store.withTracerProvider(createChild) : createChild();
       const createInheritingChild = propagate && Object.keys(inherited).length > 0
-        ? () => propagate(inherited, createChild)
-        : createChild;
+        ? () => propagate(inherited, createOwnedChild)
+        : createOwnedChild;
       const child = runtime?.withRootContext
         ? runtime.withRootContext(createInheritingChild)
         : createInheritingChild();
@@ -696,8 +698,11 @@ async function waitForTraceVisibility(
   rt: LangfuseRuntime,
   store: RestFallbackStore,
   signal: AbortSignal,
+  shutdownDeadline: number,
 ): Promise<RestFallbackTrace[]> {
-  const deadline = Date.now() + OTEL_VISIBILITY_TIMEOUT_MS;
+  const now = Date.now();
+  // Leave a quarter of the remaining shutdown time for REST ingestion.
+  const deadline = now + Math.min(OTEL_VISIBILITY_TIMEOUT_MS, Math.max(0, shutdownDeadline - now) * 0.75);
   const pending = new Map(store.traces);
   const missing = new Set<string>();
 
@@ -705,7 +710,7 @@ async function waitForTraceVisibility(
     const ids = [...pending.keys()];
     // Bound read concurrency and stop polling in time to send the REST batch.
     for (let index = 0; index < ids.length && Date.now() < deadline; index += 4) {
-      const readSignal = AbortSignal.any([signal, AbortSignal.timeout(Math.max(1, deadline - Date.now()))]);
+      const readSignal = AbortSignal.any([signal, AbortSignal.timeout(Math.max(1, Math.floor(deadline - Date.now())))]);
       await Promise.all(ids.slice(index, index + 4).map(async traceId => {
         try {
           const visibility = await getTraceVisibility(rt, store, traceId, readSignal);
@@ -726,12 +731,12 @@ function eventTimestamp(record: { endTime?: string; startTime?: string; timestam
   return record.endTime ?? record.startTime ?? record.timestamp ?? nowIso();
 }
 
-async function fallbackToRestIngestion(rt: LangfuseRuntime, signal: AbortSignal) {
+async function fallbackToRestIngestion(rt: LangfuseRuntime, signal: AbortSignal, shutdownDeadline: number) {
   const store = rt.restFallback as RestFallbackStore | undefined;
   if (!store?.traces.size || store.attempted) return;
   store.attempted = true;
 
-  const traces = await waitForTraceVisibility(rt, store, signal);
+  const traces = await waitForTraceVisibility(rt, store, signal, shutdownDeadline);
   if (traces.length === 0) return;
   const missingIds = new Set(traces.map(trace => trace.id));
   const entries: any[] = traces.map(trace => ({
@@ -864,11 +869,10 @@ export async function getRuntime(): Promise<LangfuseRuntime> {
         resources.detectResources({ detectors: [resources.envDetector] }),
       );
       const tracerProvider = new BasicTracerProvider({ resource, spanProcessors: [spanProcessor] });
-      tracing.setLangfuseTracerProvider(tracerProvider);
 
       runtime = {
         startObservation: ((name: string, body?: Record<string, unknown>, options?: { asType?: string }) => {
-          const observation = (tracing as any).startObservation(name, body, options);
+          const observation = restFallback.withTracerProvider!(() => (tracing as any).startObservation(name, body, options));
           return wrapObservation(observation, restFallback, name, body, options?.asType);
         }) as unknown as LangfuseRuntime["startObservation"],
         propagateAttributes: tracing.propagateAttributes as unknown as LangfuseRuntime["propagateAttributes"],
@@ -880,7 +884,6 @@ export async function getRuntime(): Promise<LangfuseRuntime> {
         }) as LangfuseScoreClient,
         spanProcessor,
         tracerProvider,
-        clearTracerProvider: () => tracing.setLangfuseTracerProvider(null),
         restFallback,
         pendingScores: [],
         scoreFlushAt,
@@ -892,6 +895,14 @@ export async function getRuntime(): Promise<LangfuseRuntime> {
           secretKey: state.config.secretKey,
           host: state.config.host,
         },
+      };
+      const ownedRuntime = runtime;
+      // Pi reloads extension modules per session, but the SDK provider is process-global.
+      restFallback.withTracerProvider = fn => {
+        const previous = tracing.getLangfuseTracerProvider();
+        tracing.setLangfuseTracerProvider(ownedRuntime.tracerProvider);
+        try { return fn(); }
+        finally { tracing.setLangfuseTracerProvider(previous); }
       };
       lastRuntimeError = null;
     } catch (e) {
@@ -942,7 +953,7 @@ function doShutdownRuntime(): Promise<void> {
       await runShutdownStep("OTel tracer shutdown", () => rt.tracerProvider?.shutdown?.(), deadline);
       await runShutdownStep(
         "REST fallback ingestion",
-        () => fallbackToRestIngestion(rt, controller.signal),
+        () => fallbackToRestIngestion(rt, controller.signal, deadline),
         deadline,
         controller.signal,
       );

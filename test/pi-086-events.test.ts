@@ -122,6 +122,25 @@ test("failed compactions are visible and redact status text even with output cap
   }
 });
 
+test("native compaction prefixes do not expose JSON credentials", async () => {
+  const previousConfig = installTestState("prefixed-compaction-failure");
+  try {
+    state.config!.capturePolicy = createCapturePolicy({ LANGFUSE_PRIVACY_PRESET: "metadata-only" });
+    const root = new FakeObservation();
+    state.agentState = makeAgentState(root);
+    await recordSessionCompactionFailure({
+      reason: "manual", aborted: false,
+      errorMessage: 'Compaction failed: 429 {"error":"quota exceeded","apiKey":"synthetic-private-value","password":"synthetic-password"}',
+    });
+    const status = root.children[0].observation.body?.statusMessage;
+    assert.match(status!, /Compaction failed: 429/);
+    assert.match(status!, /quota exceeded/);
+    assert.doesNotMatch(status!, /synthetic-private-value|synthetic-password/);
+  } finally {
+    restoreTestState(previousConfig);
+  }
+});
+
 test("cache warming decision is an event under the active agent trace", async () => {
   const previousConfig = installTestState("cache-decision-test");
   try {
