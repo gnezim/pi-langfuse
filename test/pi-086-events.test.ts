@@ -239,6 +239,21 @@ test("session compaction records checkpoint state and summary generation usage",
   }
 });
 
+test("compaction summary JSON credentials are masked in input and output", async () => {
+  const previousConfig = installTestState("compaction-secret-test");
+  try {
+    await recordSessionCompaction({ compactionEntry: {
+      summary: '{"password":"synthetic-review-canary"}',
+      usage: { input: 5, output: 3 },
+    } });
+    const compaction = installedRuntime.created[0];
+    assert.doesNotMatch(JSON.stringify(compaction.body?.input), /synthetic-review-canary/);
+    assert.equal(compaction.children[0].observation.body?.output, "[REDACTED_SECRET]");
+  } finally {
+    restoreTestState(previousConfig);
+  }
+});
+
 test("compaction events survive a settled run and are stamped with the session", async () => {
   const previousConfig = installTestState("compaction-out-of-run-test");
   try {

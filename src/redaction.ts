@@ -45,11 +45,15 @@ function isSensitiveField(key: string): boolean {
   return SENSITIVE_FIELD_RE.test(key.replace(/[^a-zA-Z0-9]/g, "").toLowerCase());
 }
 
-/** Recognize field names even when surrounding prose prevents parsing the JSON. */
-export function hasSensitiveJsonField(value: string): boolean {
+/** Recognize unmasked fields even when surrounding prose prevents parsing the JSON. */
+export function hasUnredactedSensitiveJsonField(value: string): boolean {
   for (const match of value.matchAll(/"((?:\\.|[^"\\])*)"\s*:/g)) {
     try {
-      if (isSensitiveField(JSON.parse(`"${match[1]}"`))) return true;
+      if (isSensitiveField(JSON.parse(`"${match[1]}"`))) {
+        const rest = value.slice(match.index! + match[0].length);
+        // Keep already-redacted diagnostics intact across repeated capture passes.
+        if (!/^\s*"\[REDACTED_SECRET\]"(?=\s*[,}\]]|\s*$)/.test(rest)) return true;
+      }
     } catch {
       // An invalid quoted key is not a JSON field name.
     }
@@ -67,7 +71,9 @@ function truncate(value: string, maxStringLength: number): string {
 
 export function redactString(value: string, options: Partial<RedactOptions> = {}): string {
   const merged = { ...defaultOptions(), ...options };
-  const secretsRedacted = truncate(value, merged.maxStringLength)
+  const bounded = truncate(value, merged.maxStringLength);
+  if (hasUnredactedSensitiveJsonField(bounded)) return REDACTED;
+  const secretsRedacted = bounded
     .replace(PRIVATE_KEY_RE, REDACTED)
     .replace(BEARER_RE, REDACTED)
     .replace(KNOWN_TOKEN_RE, REDACTED)

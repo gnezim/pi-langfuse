@@ -175,6 +175,10 @@ captured tool-error output use `[unparseable error payload]` instead of the raw 
 The same protection applies to unparseable JSON fragments with sensitive field
 names replayed inside later provider requests; ordinary surrounding text is retained
 when it contains no sensitive JSON fields.
+String-only capture paths (including assistant replies, compaction summaries, and
+custom IDs) replace text containing unmasked sensitive JSON fields with
+`[REDACTED_SECRET]`. Already-masked fields and ordinary text stay intact; captured
+output remains a string.
 
 The REST fallback ingestion is chunked so each request body stays well below
 the Langfuse gateway's payload limit (~4.5MB). These knobs control the chunk
