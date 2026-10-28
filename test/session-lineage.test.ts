@@ -6,7 +6,8 @@ import { join } from "node:path";
 
 import { resolveSessionLineage } from "../src/session-lineage.ts";
 import { bindSessionLineage, sessionLineageMetadata } from "../src/session-lineage.ts";
-import { resetRunState, runWithSession, setCurrentSession } from "../src/state.ts";
+import { resetRunState, runWithSession, setCurrentSession, state } from "../src/state.ts";
+import { createCapturePolicy } from "../src/capture-policy.ts";
 
 const PARENT_ID = "01a1639b-58c5-729a-8315-f17b045ccd28";
 
@@ -90,6 +91,19 @@ test("metadata is bound once and survives a per-run reset", (t) => {
   assert.deepEqual(sessionLineageMetadata(), { parentSessionId: PARENT_ID, sessionKind: "fork" });
   resetRunState();
   assert.deepEqual(sessionLineageMetadata(), { parentSessionId: PARENT_ID, sessionKind: "fork" });
+});
+
+test("metadata-only lineage masks JSON credentials in custom parent IDs", (t) => {
+  const dir = tempDir();
+  const previousConfig = state.config;
+  t.after(() => { state.config = previousConfig; rmSync(dir, { recursive: true, force: true }); });
+  state.config = { publicKey: "pk_test", secretKey: "sk_test", host: "https://example.invalid",
+    capturePolicy: createCapturePolicy({ LANGFUSE_PRIVACY_PRESET: "metadata-only" }) };
+  const parent = sessionFile(dir, "session.jsonl", {
+    type: "session", id: '{"password":"synthetic-review-canary"}',
+  });
+  setCurrentSession("lineage-json-secret");
+  assert.equal(sessionLineageMetadata(managerWithHeader({ parentSession: parent })).parentSessionId, "[REDACTED_SECRET]");
 });
 
 test("a session manager without a header source leaves lineage unresolved", () => {
