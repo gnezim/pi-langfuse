@@ -111,11 +111,12 @@ export function shapePayload(
     }
 
     if (item instanceof Error) {
-      return {
+      // The stack repeats the raw message; retain frames without that copy.
+      return visit({
         name: item.name,
         message: item.message,
-        stack: item.stack ? truncate(item.stack, maxString) : undefined,
-      };
+        stack: item.message ? item.stack?.replaceAll(item.message, "[error message]") : item.stack,
+      }, remainingDepth, seen);
     }
 
     if (typeof item === "object") {
@@ -215,6 +216,7 @@ export function extractTextContent(content: unknown, maxLength?: number, depth =
  * or as a wall of escaped JSON. Shape and redact before extracting any text.
  */
 export function toStatusMessage(value: unknown, maxLength = 1_000): string {
+  maxLength = Math.min(maxLength, getLimits().maxString);
   const shaped = shapePayload(value instanceof Error ? value.message || String(value) : value, { maxString: maxLength });
   const text = extractTextContent(shaped, maxLength);
   if (text) {
