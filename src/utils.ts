@@ -40,6 +40,7 @@ export function shapePayload(
     maxObjectKeys?: number;
     redact?: boolean;
     parseJson?: boolean;
+    parseJsonPrefix?: boolean;
   } = {},
 ): unknown {
   const limits = getLimits();
@@ -49,6 +50,13 @@ export function shapePayload(
   const maxArrayItems = options.maxArrayItems ?? limits.maxArrayItems;
   const maxObjectKeys = options.maxObjectKeys ?? limits.maxObjectKeys;
   const budget = { exhausted: false, nodeCount: 0 };
+  const redactionOptions = {
+    ...redactOptionsFor(getCapturePolicy()),
+    maxDepth: depth,
+    maxStringLength: maxString,
+    maxArrayItems,
+    maxObjectKeys,
+  };
 
   function visit(item: unknown, remainingDepth: number, seen: WeakSet<object>): unknown {
     if (budget.exhausted) {
@@ -62,19 +70,27 @@ export function shapePayload(
     }
 
     if (typeof item === "string") {
+      const jsonStart = options.parseJsonPrefix ? item.search(/[\[{]/) : item.search(/^[\s]*[\[{]/);
       // Truncated JSON loses field names needed for secret redaction.
-      if (options.parseJson !== false && /^[\s]*[\[{]/.test(item) && item.length > maxString) {
+      if (options.parseJson !== false && jsonStart >= 0 && item.length > maxString) {
         return PAYLOAD_TOO_LARGE;
       }
       const truncated = truncate(item, maxString);
       if (options.parseJson === false) {
         return truncated;
       }
-      const parsed = tryParseJson(truncated);
-      if (parsed === truncated) {
+      const candidate = jsonStart > 0 ? truncated.slice(jsonStart) : truncated;
+      const parsed = tryParseJson(candidate);
+      if (parsed === candidate) {
         return truncated;
       }
-      return visit(parsed, remainingDepth - 1, seen);
+      const shaped = visit(parsed, remainingDepth - 1, seen);
+      if (jsonStart > 0 && truncated.slice(0, jsonStart).trim()) {
+        // Pi/provider prefixes must not hide structured fields from redaction.
+        const safe = options.redact === false ? shaped : redactValue(shaped, redactionOptions);
+        return truncated.slice(0, jsonStart) + JSON.stringify(safe);
+      }
+      return shaped;
     }
 
     if (
@@ -146,13 +162,7 @@ export function shapePayload(
   const shaped = visit(value, depth, new WeakSet<object>());
   return options.redact === false
     ? shaped
-    : redactValue(shaped, {
-        ...redactOptionsFor(getCapturePolicy()),
-        maxDepth: depth,
-        maxStringLength: maxString,
-        maxArrayItems,
-        maxObjectKeys,
-      });
+    : redactValue(shaped, redactionOptions);
 }
 
 export function safeSerialize(value: unknown, maxLength = getLimits().maxToolPayload): string {
@@ -217,7 +227,9 @@ export function extractTextContent(content: unknown, maxLength?: number, depth =
  */
 export function toStatusMessage(value: unknown, maxLength = 1_000): string {
   maxLength = Math.min(maxLength, getLimits().maxString);
-  const shaped = shapePayload(value instanceof Error ? value.message || String(value) : value, { maxString: maxLength });
+  const shaped = shapePayload(value instanceof Error ? value.message || String(value) : value, {
+    maxString: maxLength, parseJsonPrefix: true,
+  });
   const text = extractTextContent(shaped, maxLength);
   if (text) {
     return text;

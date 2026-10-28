@@ -56,6 +56,17 @@ test("status text omits oversized JSON rather than disclosing a truncated secret
   assert.equal(toStatusMessage(value, 100), "[payload too large]");
 });
 
+test("prefixed error shaping stays bounded without changing ordinary text capture", () => {
+  const json = JSON.stringify({ password: "synthetic-password", padding: "x".repeat(2_000) });
+  assert.equal(toStatusMessage(`Compaction failed: ${json}`, 100), "[payload too large]");
+  const text = 'Read the object { then continue with prose ' + 'x'.repeat(200);
+  assert.equal(shapePayload(text, { maxString: 100 }), text.slice(0, 100) + "... [truncated]");
+  for (const value of [
+    { content: [{ type: "text", text: '429 {"password":"synthetic-password"}' }] },
+    { error: new Error('Compaction failed: {"password":"synthetic-password"}') },
+  ]) assert.doesNotMatch(toStatusMessage(value), /synthetic-password/);
+});
+
 test("status text respects object traversal limits before serialization", () => {
   let accessed = 0;
   const value = Object.create(null);

@@ -11,6 +11,7 @@ Langfuse observability extension for [Pi Coding Agent](https://github.com/earend
 
 - One Langfuse trace per user prompt, grouped by Pi session.
 - Root `agent`, per-request `generation`, and per-tool `tool` observations.
+- Foreground child sessions keep their SDK exporters isolated, so parent telemetry continues after a child exits.
 - Final assistant output capture, generation/tool error visibility, and trace-level scores.
 - Privacy controls for inputs, outputs, tool I/O, system prompt, and cwd.
 - Secret redaction and local path hashing before upload.
@@ -168,6 +169,7 @@ payloads in full, raise or disable the relevant limit (e.g.
 JSON strings above the string limit are replaced with `[payload too large]` rather
 than cut into invalid JSON that could bypass sensitive-field redaction. Error
 status text uses the same shaping and redaction limits, even when IO capture is disabled.
+Status formatting also masks JSON credentials after Pi/provider error prefixes.
 
 The REST fallback ingestion is chunked so each request body stays well below
 the Langfuse gateway's payload limit (~4.5MB). These knobs control the chunk
@@ -183,6 +185,8 @@ When the accumulated fallback payload exceeds the 32MB ceiling, ingestion is
 skipped with a warning instead of attempting an unrecoverably large upload.
 Fallback checks each trace separately within one visibility window and restores
 only missing traces, preserving each trace's session, user, name, and metadata.
+Visibility polling uses at most three quarters of the remaining shutdown time,
+leaving the rest for ingestion even when SDK cleanup was slow.
 
 ### Reasoning tokens
 
@@ -290,6 +294,7 @@ Langfuse v4 in `events_only` mode removes legacy reads; the compaction and error
 - LLM requests appear as generation observations, including usage and cost when the provider exposes them.
   Failed assistant messages are marked `ERROR` with a redacted `statusMessage`, including streaming
   failures after HTTP 200 and failures without provider hooks. User-aborted generations are `WARNING`.
+  A successful final assistant response clears an earlier transient HTTP error from an internal retry.
   Reasoning tokens are reported as their own usage bucket when `PI_LANGFUSE_SPLIT_REASONING_TOKENS` is enabled.
   Virtual routing preserves `selectedModel`/`selectedProvider` alongside `actualModel`/`actualProvider`;
   the generation model and `provider` metadata use the actual identity when available.
