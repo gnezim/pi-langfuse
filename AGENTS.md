@@ -120,7 +120,8 @@ Relevant implementation details:
   default 4MB) so a single request stays below the Langfuse gateway ~4.5MB body limit, and it is skipped
   with a warning when the whole payload exceeds `DEFAULT_MAX_FALLBACK_TOTAL_BYTES` (default 32MB).
   Both knobs are env-tunable (`PI_LANGFUSE_MAX_INGESTION_BATCH_BYTES`, `PI_LANGFUSE_MAX_FALLBACK_TOTAL_BYTES`).
-- `splitIngestionBatch()` preserves entries exactly across chunks; keep the trace-create entry first.
+- `splitIngestionBatch()` preserves retained entries exactly across chunks and skips individually oversized
+  events with a size-only warning; keep the trace-create entry first when it fits.
 - Scores are sent separately through the Langfuse client; they are not part of the OTel span export path.
 - Root trace IO is mirrored from the root agent observation when `setTraceIO()` is available.
 

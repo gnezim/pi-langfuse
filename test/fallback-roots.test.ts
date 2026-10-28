@@ -99,6 +99,33 @@ test("REST fallback retains ingestion time after a slow SDK flush", async () => 
   assert.equal(restored?.sessionId, "slow-flush-session");
 }));
 
+test("REST fallback skips an oversized event with a warning and restores the remaining events", async () => withFallback(async (runtime, batches) => {
+  const previousBudget = process.env.PI_LANGFUSE_MAX_INGESTION_BATCH_BYTES;
+  const originalWarn = console.warn;
+  const warnings: string[] = [];
+  process.env.PI_LANGFUSE_MAX_INGESTION_BATCH_BYTES = "1024";
+  console.warn = (...args: unknown[]) => warnings.push(args.map(String).join(" "));
+  try {
+    const large = runtime.startObservation("oversized", { input: "界".repeat(1000) }, { asType: "span" });
+    large.end();
+    const kept = runtime.startObservation("retained", { input: "small" }, { asType: "span" });
+    kept.end();
+    await forceShutdownRuntime();
+
+    assert.ok(batches.length > 0);
+    assert.ok(batches.every(batch => Buffer.byteLength(JSON.stringify({ batch })) <= 1024));
+    assert.ok(batches.flat().some(entry => entry.body.id === kept.id));
+    assert.ok(batches.flat().some(entry => entry.type === "trace-create" && entry.body.id === kept.traceId));
+    assert.ok(!batches.flat().some(entry => entry.body.id === large.id));
+    assert.ok(warnings.some(message => /oversized.*event/i.test(message)));
+    assert.ok(warnings.every(message => !message.includes("界")));
+  } finally {
+    console.warn = originalWarn;
+    if (previousBudget === undefined) delete process.env.PI_LANGFUSE_MAX_INGESTION_BATCH_BYTES;
+    else process.env.PI_LANGFUSE_MAX_INGESTION_BATCH_BYTES = previousBudget;
+  }
+}));
+
 test("REST fallback restores a missing later trace even when the first is visible", async () => withFallback(async (runtime, batches, visible) => {
   const roots = [];
   for (const sessionId of ["first-session", "second-session"]) {

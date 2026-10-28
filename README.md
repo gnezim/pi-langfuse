@@ -170,6 +170,11 @@ JSON strings above the string limit are replaced with `[payload too large]` rath
 than cut into invalid JSON that could bypass sensitive-field redaction. Error
 status text uses the same shaping and redaction limits, even when IO capture is disabled.
 Status formatting also masks JSON credentials after Pi/provider error prefixes.
+If surrounding diagnostics make structured error text unparseable, status and
+captured tool-error output use `[unparseable error payload]` instead of the raw text.
+The same protection applies to unparseable JSON fragments with sensitive field
+names replayed inside later provider requests; ordinary surrounding text is retained
+when it contains no sensitive JSON fields.
 
 The REST fallback ingestion is chunked so each request body stays well below
 the Langfuse gateway's payload limit (~4.5MB). These knobs control the chunk
@@ -183,6 +188,9 @@ export PI_LANGFUSE_MAX_FALLBACK_TOTAL_BYTES=33554432  # whole-payload ceiling, d
 
 When the accumulated fallback payload exceeds the 32MB ceiling, ingestion is
 skipped with a warning instead of attempting an unrecoverably large upload.
+An individual event above the per-request budget is skipped with a size-only
+warning; the remaining events are still sent. Raise capture limits with this
+per-event ceiling in mind.
 Fallback checks each trace separately within one visibility window and restores
 only missing traces, preserving each trace's session, user, name, and metadata.
 Visibility polling uses at most three quarters of the remaining shutdown time,

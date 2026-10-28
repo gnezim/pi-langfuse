@@ -41,6 +41,22 @@ const ABSOLUTE_PATH_RE =
 const SENSITIVE_FIELD_RE =
   /^(authorization|cookie|setcookie|xapikey|apikey|token|accesstoken|refreshtoken|secret|secretkey|password|passwd|privatekey)$/;
 
+function isSensitiveField(key: string): boolean {
+  return SENSITIVE_FIELD_RE.test(key.replace(/[^a-zA-Z0-9]/g, "").toLowerCase());
+}
+
+/** Recognize field names even when surrounding prose prevents parsing the JSON. */
+export function hasSensitiveJsonField(value: string): boolean {
+  for (const match of value.matchAll(/"((?:\\.|[^"\\])*)"\s*:/g)) {
+    try {
+      if (isSensitiveField(JSON.parse(`"${match[1]}"`))) return true;
+    } catch {
+      // An invalid quoted key is not a JSON field name.
+    }
+  }
+  return false;
+}
+
 export function hashPath(path: string): string {
   return `[PATH_HASH:${createHash("sha256").update(path).digest("hex").slice(0, 12)}]`;
 }
@@ -118,8 +134,7 @@ function visit(value: unknown, options: RedactOptions, depth: number, seen: Weak
   const entries = Object.entries(value as Record<string, unknown>);
   const output: Record<string, unknown> = {};
   for (const [key, item] of entries.slice(0, options.maxObjectKeys)) {
-    const normalizedKey = key.replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
-    output[key] = SENSITIVE_FIELD_RE.test(normalizedKey) ? REDACTED : visit(item, options, depth - 1, seen);
+    output[key] = isSensitiveField(key) ? REDACTED : visit(item, options, depth - 1, seen);
   }
   if (entries.length > options.maxObjectKeys) {
     output.__truncatedKeys = entries.length - options.maxObjectKeys;
