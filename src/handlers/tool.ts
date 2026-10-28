@@ -84,7 +84,7 @@ export async function finishToolObservation(event: Record<string, unknown>) {
 
   const isError = Boolean(event.isError ?? event.error ?? event.status === "error");
   const output =
-    extractTextContent(event.content, getLimits().maxToolPayload) ??
+    extractTextContent(event.content) ??
     event.output ??
     event.result ??
     event.error ??

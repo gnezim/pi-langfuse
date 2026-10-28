@@ -179,6 +179,9 @@ String-only capture paths (including assistant replies, compaction summaries, an
 custom IDs) replace text containing unmasked sensitive JSON fields with
 `[REDACTED_SECRET]`. Already-masked fields and ordinary text stay intact; captured
 output remains a string.
+Credential assignments are masked with or without quotes, including escaped or
+unterminated values. Known tokens are masked before string truncation so a token
+crossing a capture limit cannot escape detection as a shorter fragment.
 
 The REST fallback ingestion is chunked so each request body stays well below
 the Langfuse gateway's payload limit (~4.5MB). These knobs control the chunk

@@ -30,8 +30,9 @@ function defaultOptions(): RedactOptions {
   };
 }
 
+// Unterminated quotes can come from tool output; keep their remaining value secret.
 const SECRET_ASSIGNMENT_RE =
-  /\b([A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASS|API[_-]?KEY|PRIVATE[_-]?KEY|AUTH|COOKIE)[A-Z0-9_]*)\s*=\s*([^\s"'`]+)/gi;
+  /\b([A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASS|API[_-]?KEY|PRIVATE[_-]?KEY|AUTH|COOKIE)[A-Z0-9_]*)\s*=\s*(?:"(?:\\[\s\S]?|[^"\\])*(?:"|$)|'(?:\\[\s\S]?|[^'\\])*(?:'|$)|\\[\s\S]?|[^\s"'`\\])+/gi;
 const PRIVATE_KEY_RE = /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g;
 const BEARER_RE = /\bBearer\s+[A-Za-z0-9._~+/=-]{12,}/gi;
 const KNOWN_TOKEN_RE =
@@ -71,13 +72,13 @@ function truncate(value: string, maxStringLength: number): string {
 
 export function redactString(value: string, options: Partial<RedactOptions> = {}): string {
   const merged = { ...defaultOptions(), ...options };
-  const bounded = truncate(value, merged.maxStringLength);
-  if (hasUnredactedSensitiveJsonField(bounded)) return REDACTED;
-  const secretsRedacted = bounded
+  // Truncating first can make a known token too short for its recognizer.
+  const secretsRedacted = truncate(value
     .replace(PRIVATE_KEY_RE, REDACTED)
     .replace(BEARER_RE, REDACTED)
     .replace(KNOWN_TOKEN_RE, REDACTED)
-    .replace(SECRET_ASSIGNMENT_RE, (_match, key: string) => `${key}=${REDACTED}`);
+    .replace(SECRET_ASSIGNMENT_RE, (_match, key: string) => `${key}=${REDACTED}`), merged.maxStringLength);
+  if (hasUnredactedSensitiveJsonField(secretsRedacted)) return REDACTED;
 
   if (!merged.redactPaths) {
     return secretsRedacted;

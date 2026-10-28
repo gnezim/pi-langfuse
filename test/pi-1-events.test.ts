@@ -8,6 +8,7 @@ import { pathToFileURL } from "node:url";
 
 import registerExtension from "../index.ts";
 import { createCapturePolicy } from "../src/capture-policy.ts";
+import { DEFAULT_LIMITS } from "../src/limits.ts";
 import { startToolObservation, finishToolObservation } from "../src/handlers/tool.ts";
 import { startGeneration, finishGenerationFromMessage, createFallbackGenerationFromTurn, recordGenerationIdentity } from "../src/handlers/generation.ts";
 import { __setRuntimeForTest } from "../src/langfuse.ts";
@@ -128,6 +129,20 @@ test("native shell error suffixes cannot expose JSON secrets in status or tool o
     assert.equal(body.statusMessage, "[unparseable error payload]");
     assert.equal(body.output, preset === "metadata-only" ? undefined : "[unparseable error payload]");
   }
+}));
+
+test("tool text tokens are masked before the tool payload limit", async () => withState(async () => {
+  state.config!.capturePolicy = createCapturePolicy({ LANGFUSE_PRIVACY_PRESET: "full-debug" });
+  state.config!.limits = { ...DEFAULT_LIMITS, maxToolPayload: 12 };
+  const root = new Observation();
+  state.agentState = agent(root);
+  await startToolObservation({ toolCallId: "bounded-tool", toolName: "bash" });
+  await finishToolObservation({ toolCallId: "bounded-tool", isError: true,
+    content: [{ type: "text", text: "ghp_abcdefghijklmnopqrstuvwxyz123456" }] });
+  const body = root.children[0].body;
+  assert.ok(body.output);
+  assert.equal(body.level, "ERROR");
+  assert.doesNotMatch(JSON.stringify({ output: body.output, status: body.statusMessage }), /ghp_/);
 }));
 
 test("virtual routing separates selected and actual identities across requests and fallback", async () => withState(async () => {

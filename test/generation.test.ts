@@ -79,6 +79,29 @@ test("assistant JSON credentials stay masked in generation and attempt output", 
   }
 });
 
+test("metadata-only generation errors mask quoted credentials and boundary tokens", async () => {
+  clearAllSessionStates();
+  const previousConfig = state.config;
+  state.config = { publicKey: "pk_test", secretKey: "sk_test", host: "https://example.invalid",
+    capturePolicy: createCapturePolicy({ LANGFUSE_PRIVACY_PRESET: "metadata-only" }) };
+  try {
+    for (const errorMessage of [
+      'API_KEY="synthetic-quoted-canary"',
+      "PASSWORD='synthetic-quoted-canary'",
+      "x".repeat(11987) + " ghp_abcdefghijklmnopqrstuvwxyz123456",
+    ]) {
+      const root = new FakeObservation();
+      state.agentState = makeAgentState(root);
+      await startGeneration({ payload: {} });
+      await finishGenerationFromMessage({ message: { role: "assistant", stopReason: "error", errorMessage, content: [] } });
+      const update = root.children[0].updates.at(-1)!;
+      assert.equal(update.level, "ERROR");
+      assert.equal(update.output, undefined);
+      assert.doesNotMatch(update.statusMessage!, /synthetic-quoted-canary|ghp_/);
+    }
+  } finally { state.config = previousConfig; clearAllSessionStates(); }
+});
+
 test("startGeneration includes modelParameters extracted from provider payload", async () => {
   clearAllSessionStates();
   setCurrentSession("generation-test");

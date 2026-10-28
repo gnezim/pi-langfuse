@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { redactString, redactValue } from "../src/redaction.ts";
 import { applyCapturePolicy, createCapturePolicy, redactOptionsFor } from "../src/capture-policy.ts";
 import { state } from "../src/state.ts";
-import { shapePayload } from "../src/utils.ts";
+import { shapePayload, toStatusMessage } from "../src/utils.ts";
 
 const PATHS_ON = createCapturePolicy({
   LANGFUSE_PRIVACY_PRESET: "full-debug",
@@ -166,4 +166,40 @@ test("private key fragments stay masked when truncation removes the PEM footer",
   assert.equal(redactString(pem, { maxStringLength: 100 }), "[REDACTED_SECRET]");
   assert.equal(shapePayload(pem, { maxString: 100 }), "[REDACTED_SECRET]");
   assert.equal(redactString(pem.split("-----END")[0]), "[REDACTED_SECRET]");
+});
+
+test("quoted credential assignments stay masked through escapes and missing closing quotes", () => {
+  for (const value of [
+    'API_KEY="synthetic-quoted-canary"',
+    "PASSWORD='synthetic quoted canary'",
+    'TOKEN="synthetic\\"quoted-canary"',
+    "TOKEN='synthetic\\'quoted-canary'",
+    'API_KEY="synthetic-quoted-canary',
+    "PASSWORD='synthetic quoted canary",
+    'API_KEY="synthetic"-quoted-canary',
+    'API_KEY=synthetic\\ quoted-canary',
+    'API_KEY="synthetic-quoted-canary\\',
+  ]) {
+    assert.match(redactString(value), /^[A-Z_]+=\[REDACTED_SECRET\]$/);
+  }
+  assert.equal(redactString('API_KEY="synthetic-quoted-canary" request failed'), 'API_KEY=[REDACTED_SECRET] request failed');
+  assert.equal(redactString('COLOR="blue"'), 'COLOR="blue"');
+});
+
+test("token masking survives string limits in capture, shaping, and status text", () => {
+  for (const token of [
+    "ghp_abcdefghijklmnopqrstuvwxyz123456",
+    "npm_abcdefghijklmnopqrstuvwxyz123456",
+    "AKIA1234567890123456",
+    "Bearer abcdefghijklmnopqrstuvwxyz",
+  ]) {
+    for (const captured of [
+      redactString(token, { maxStringLength: 12 }),
+      shapePayload(token, { maxString: 12 }),
+      shapePayload(token, { maxString: 12, parseJson: false }),
+      toStatusMessage("x".repeat(987) + " " + token),
+    ]) assert.doesNotMatch(String(captured), /ghp_|npm_|AKIA|Bearer /);
+  }
+  assert.equal(redactString("ordinary long text", { maxStringLength: 8 }), "ordinary... [truncated]");
+  assert.doesNotMatch(redactString("Bearer " + "a".repeat(100) + ' {"password":"synthetic-canary"}', { maxStringLength: 80 }), /synthetic-canary/);
 });
