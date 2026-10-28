@@ -9,6 +9,7 @@ import {
 } from "../src/handlers/generation.ts";
 import { createCapturePolicy } from "../src/capture-policy.ts";
 import { closeDanglingObservations } from "../src/handlers/tool.ts";
+import { finishAgentAttempt } from "../src/handlers/agent.ts";
 import { extractGenerationStatus } from "../src/utils.ts";
 import {
   clearAllSessionStates,
@@ -55,6 +56,28 @@ function makeAgentState(root: LangfuseObservation): AgentState {
     providerMetadataByRequest: new Map(),
   };
 }
+
+test("assistant JSON credentials stay masked in generation and attempt output", async () => {
+  clearAllSessionStates();
+  const previousConfig = state.config;
+  state.config = { publicKey: "pk_test", secretKey: "sk_test", host: "https://example.invalid",
+    capturePolicy: createCapturePolicy({ LANGFUSE_PRIVACY_PRESET: "full-debug" }) };
+  try {
+    const root = new FakeObservation();
+    const attempt = new FakeObservation();
+    state.agentState = { ...makeAgentState(root), activeAttempt: attempt };
+    const message = { role: "assistant", stopReason: "stop",
+      content: [{ type: "text", text: '{"password":"synthetic-review-canary"}' }] };
+    await startGeneration({ payload: {} });
+    await finishGenerationFromMessage({ message });
+    finishAgentAttempt({ messages: [message] });
+    assert.equal(attempt.children[0].updates.at(-1)?.output, "[REDACTED_SECRET]");
+    assert.equal(attempt.updates.at(-1)?.output, "[REDACTED_SECRET]");
+  } finally {
+    state.config = previousConfig;
+    clearAllSessionStates();
+  }
+});
 
 test("startGeneration includes modelParameters extracted from provider payload", async () => {
   clearAllSessionStates();

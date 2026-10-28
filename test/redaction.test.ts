@@ -142,6 +142,25 @@ test("redacts camelCase credential field names", () => {
   });
 });
 
+test("captured text masks JSON credentials without changing its string type", () => {
+  const policy = createCapturePolicy({ LANGFUSE_PRIVACY_PRESET: "full-debug" });
+  for (const output of [
+    '{"password":"synthetic-review-canary"}',
+    'Result: {"pa\\u0073sword":"synthetic-review-canary"} (done)',
+    '{"token":"[REDACTED_SECRET]synthetic-review-canary"}',
+    '{"token":"[REDACTED_SECRET]","apiKey":"synthetic-review-canary"}',
+  ]) {
+    const captured = applyCapturePolicy({ output }, policy).output;
+    assert.equal(typeof captured, "string");
+    assert.doesNotMatch(captured as string, /synthetic-review-canary/);
+  }
+  for (const output of [
+    "ordinary answer",
+    'Result: {"answer":42} (done)',
+    'Result: {"password":"[REDACTED_SECRET]"} (done)',
+  ]) assert.equal(applyCapturePolicy({ output }, policy).output, output);
+});
+
 test("private key fragments stay masked when truncation removes the PEM footer", () => {
   const pem = "-----BEGIN PRIVATE KEY-----\n" + "synthetic-private-fragment\n".repeat(100) + "-----END PRIVATE KEY-----";
   assert.equal(redactString(pem, { maxStringLength: 100 }), "[REDACTED_SECRET]");
