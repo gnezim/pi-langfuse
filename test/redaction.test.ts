@@ -5,6 +5,7 @@ import { execFileSync } from "node:child_process";
 import { redactString, redactValue } from "../src/redaction.ts";
 import { applyCapturePolicy, createCapturePolicy, redactOptionsFor } from "../src/capture-policy.ts";
 import { state } from "../src/state.ts";
+import { DEFAULT_LIMITS } from "../src/limits.ts";
 import { shapePayload, toStatusMessage } from "../src/utils.ts";
 
 const PATHS_ON = createCapturePolicy({
@@ -150,6 +151,9 @@ test("captured text masks JSON credentials without changing its string type", ()
     'Result: {"pa\\u0073sword":"synthetic-review-canary"} (done)',
     '{"token":"[REDACTED_SECRET]synthetic-review-canary"}',
     '{"token":"[REDACTED_SECRET]","apiKey":"synthetic-review-canary"}',
+    JSON.stringify({ message: JSON.stringify({ password: "synthetic-review-canary" }) }),
+    JSON.stringify(JSON.stringify({ apiKey: "synthetic-review-canary" })),
+    JSON.stringify({ message: 'provider said "invalid request: {"password":"synthetic-review-canary"}' }),
   ]) {
     const captured = applyCapturePolicy({ output }, policy).output;
     assert.equal(typeof captured, "string");
@@ -159,7 +163,22 @@ test("captured text masks JSON credentials without changing its string type", ()
     "ordinary answer",
     'Result: {"answer":42} (done)',
     'Result: {"password":"[REDACTED_SECRET]"} (done)',
+    JSON.stringify({ message: JSON.stringify({ password: "[REDACTED_SECRET]" }) }),
+    JSON.stringify({ message: 'ordinary "quoted" answer' }),
   ]) assert.equal(applyCapturePolicy({ output }, policy).output, output);
+});
+
+test("serialized JSON stays secret when truncation or inspection limits prevent decoding", () => {
+  const value = JSON.stringify({ message: JSON.stringify(JSON.stringify({ password: "synthetic-review-canary" })) });
+  assert.equal(redactString(value, { maxStringLength: 40 }), "[REDACTED_SECRET]");
+  const previous = state.config;
+  try {
+    for (const limits of [{ maxDepth: 1 }, { maxNodes: 1 }]) {
+      state.config = { publicKey: "pk_test", secretKey: "sk_test", host: "https://example.invalid",
+        limits: { ...DEFAULT_LIMITS, ...limits } };
+      assert.equal(redactString(value), "[REDACTED_SECRET]");
+    }
+  } finally { state.config = previous; }
 });
 
 test("private key fragments stay masked when truncation removes the PEM footer", () => {

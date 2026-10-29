@@ -179,6 +179,8 @@ String-only capture paths (including assistant replies, compaction summaries, an
 custom IDs) replace text containing unmasked sensitive JSON fields with
 `[REDACTED_SECRET]`. Already-masked fields and ordinary text stay intact; captured
 output remains a string.
+This check also decodes nested JSON strings within the existing depth/node limits.
+Ambiguous escaped text or exhausted inspection limits hide the string rather than expose unchecked content.
 Credential assignments are masked with or without quotes, including escaped or
 unterminated values. Escaped quotes in serialized text protect the entire value,
 including spaces.
