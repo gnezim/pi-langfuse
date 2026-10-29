@@ -140,13 +140,6 @@ export const state = {
   set setupAttemptedThisSession(attempted: boolean) {
     getSessionRunState().setupAttemptedThisSession = attempted;
   },
-
-  get parentSessionId() {
-    return getSessionRunState().parentSessionId;
-  },
-  get sessionKind() {
-    return getSessionRunState().sessionKind;
-  },
 };
 
 export function resetRunState(sessionId = getActiveSessionId()) {
