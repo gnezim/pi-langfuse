@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 
 import { redactString, redactValue } from "../src/redaction.ts";
 import { applyCapturePolicy, createCapturePolicy, redactOptionsFor } from "../src/capture-policy.ts";
@@ -202,4 +203,48 @@ test("token masking survives string limits in capture, shaping, and status text"
   }
   assert.equal(redactString("ordinary long text", { maxStringLength: 8 }), "ordinary... [truncated]");
   assert.doesNotMatch(redactString("Bearer " + "a".repeat(100) + ' {"password":"synthetic-canary"}', { maxStringLength: 80 }), /synthetic-canary/);
+});
+
+test("escaped quoted assignments keep whitespace, inner quotes, and adjacent segments secret", () => {
+  for (const value of [
+    String.raw`API_KEY=\"synthetic quoted canary\"`,
+    String.raw`PASSWORD=\'synthetic quoted canary\'`,
+    String.raw`TOKEN=\"synthetic \\\"inner quote\\\" canary\"`,
+    String.raw`TOKEN=\\\"synthetic quoted canary\\\"`,
+    String.raw`TOKEN=prefix\"synthetic quoted canary\"suffix`,
+    String.raw`TOKEN=\"synthetic quoted canary`,
+  ]) {
+    assert.match(redactString(value), /^[A-Z_]+=\[REDACTED_SECRET\]$/);
+  }
+  assert.equal(redactString(String.raw`API_KEY=\"synthetic quoted canary\" request failed`),
+    "API_KEY=[REDACTED_SECRET] request failed");
+  assert.doesNotMatch(redactString('COLOR="API_KEY=synthetic-canary"'), /synthetic-canary/);
+  assert.equal(redactString("COLOR=blue PRIVATE-KEY=synthetic-canary TOKEN=second-canary"),
+    "COLOR=blue PRIVATE-KEY=[REDACTED_SECRET] TOKEN=[REDACTED_SECRET]");
+});
+
+test("large key-like text stays bounded without blocking capture", () => {
+  // A separate process can be killed even when a regex blocks its event loop.
+  execFileSync(process.execPath, ["--import", "tsx", "--import",
+    new URL("./reset-ambient-env.ts", import.meta.url).href,
+    new URL("./fixtures/large-redaction-child.ts", import.meta.url).pathname,
+  ], { timeout: 5_000, stdio: "pipe" });
+});
+
+test("quoted values ending in escaped backslashes preserve the following diagnostic", () => {
+  const text = "TOKEN=" + JSON.stringify("synthetic\\") + " request failed (503)";
+  for (const input of [text, JSON.stringify({ message: text }), JSON.stringify(JSON.stringify({ message: text }))]) {
+    const captured = redactString(input);
+    assert.doesNotMatch(captured, /synthetic/);
+    assert.match(captured, /request failed \(503\)/);
+  }
+});
+
+test("serialized single-quoted assignments keep escaped interior quotes secret", () => {
+  const text = "PASSWORD='synthetic \\'inner quoted\\' canary' request failed";
+  for (const input of [text, JSON.stringify({ message: text }), JSON.stringify(JSON.stringify({ message: text }))]) {
+    const captured = redactString(input);
+    assert.doesNotMatch(captured, /synthetic|inner|quoted|canary/);
+    assert.match(captured, /request failed/);
+  }
 });
