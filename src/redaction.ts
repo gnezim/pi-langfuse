@@ -46,18 +46,33 @@ function isSensitiveField(key: string): boolean {
 
 /** Recognize unmasked fields even when surrounding prose prevents parsing the JSON. */
 export function hasUnredactedSensitiveJsonField(value: string): boolean {
-  for (const match of value.matchAll(/"((?:\\.|[^"\\])*)"\s*:/g)) {
-    try {
-      if (isSensitiveField(JSON.parse(`"${match[1]}"`))) {
-        const rest = value.slice(match.index! + match[0].length);
-        // Keep already-redacted diagnostics intact across repeated capture passes.
-        if (!/^\s*"\[REDACTED_SECRET\]"(?=\s*[,}\]]|\s*$)/.test(rest)) return true;
+  const { maxDepth, maxNodes } = getLimits();
+  let nodes = 0;
+  function inspect(text: string, depth: number): boolean {
+    // Prose can have unmatched quotes, so find keys independently of complete literals.
+    for (const match of text.matchAll(/"((?:\\.|[^"\\])*)"\s*:/g)) {
+      if (++nodes > maxNodes) return true;
+      try {
+        const rest = text.slice(match.index! + match[0].length);
+        if (isSensitiveField(JSON.parse(`"${match[1]}"`))
+          && !/^\s*"\[REDACTED_SECRET\]"(?=\s*[,}\]]|\s*$)/.test(rest)) return true;
+      } catch {
+        // An invalid quoted key is not a JSON field name.
       }
-    } catch {
-      // An invalid quoted key is not a JSON field name.
     }
+    for (const match of text.matchAll(/"((?:\\[\s\S]?|[^"\\])*)("|$)/g)) {
+      if (++nodes > maxNodes) return true;
+      try {
+        const decoded: string = JSON.parse(match[0]);
+        if (decoded.includes('"') && (depth >= maxDepth || inspect(decoded, depth + 1))) return true;
+      } catch {
+        // Truncated or invalid escaping must not hide an embedded JSON credential.
+        if (match[1].includes("\\")) return true;
+      }
+    }
+    return false;
   }
-  return false;
+  return inspect(value, 0);
 }
 
 export function hashPath(path: string): string {

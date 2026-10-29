@@ -57,49 +57,33 @@ function makeAgentState(root: LangfuseObservation): AgentState {
   };
 }
 
-test("assistant JSON credentials stay masked in generation and attempt output", async () => {
-  clearAllSessionStates();
-  const previousConfig = state.config;
-  state.config = { publicKey: "pk_test", secretKey: "sk_test", host: "https://example.invalid",
-    capturePolicy: createCapturePolicy({ LANGFUSE_PRIVACY_PRESET: "full-debug" }) };
-  try {
-    const root = new FakeObservation();
-    const attempt = new FakeObservation();
-    state.agentState = { ...makeAgentState(root), activeAttempt: attempt };
-    const message = { role: "assistant", stopReason: "stop",
-      content: [{ type: "text", text: '{"password":"synthetic-review-canary"}' }] };
-    await startGeneration({ payload: {} });
-    await finishGenerationFromMessage({ message });
-    finishAgentAttempt({ messages: [message] });
-    assert.equal(attempt.children[0].updates.at(-1)?.output, "[REDACTED_SECRET]");
-    assert.equal(attempt.updates.at(-1)?.output, "[REDACTED_SECRET]");
-  } finally {
-    state.config = previousConfig;
+for (const { name, text, expected } of [
+  { name: "JSON fields", text: '{"password":"synthetic-review-canary"}', expected: "[REDACTED_SECRET]" },
+  { name: "quoted assignments", text: JSON.stringify({ message: 'API_KEY="synthetic canary secret"' }), expected: undefined },
+  { name: "nested JSON fields", text: JSON.stringify({ message: JSON.stringify({ password: "synthetic-nested-canary" }) }), expected: "[REDACTED_SECRET]" },
+]) {
+  test(`${name} stay masked in generation and attempt output`, async () => {
     clearAllSessionStates();
-  }
-});
-
-test("serialized quoted assignments cannot leak through generation and attempt output", async () => {
-  clearAllSessionStates();
-  const previousConfig = state.config;
-  state.config = { publicKey: "pk_test", secretKey: "sk_test", host: "https://example.invalid",
-    capturePolicy: createCapturePolicy({ LANGFUSE_PRIVACY_PRESET: "full-debug" }) };
-  try {
-    const root = new FakeObservation();
-    const attempt = new FakeObservation();
-    state.agentState = { ...makeAgentState(root), activeAttempt: attempt };
-    const message = { role: "assistant", stopReason: "stop", content: [{ type: "text",
-      text: JSON.stringify({ message: 'API_KEY="synthetic canary secret"' }) }] };
-    await startGeneration({ payload: {} });
-    await finishGenerationFromMessage({ message });
-    finishAgentAttempt({ messages: [message] });
-    for (const output of [attempt.children[0].updates.at(-1)?.output, attempt.updates.at(-1)?.output]) {
-      assert.equal(typeof output, "string");
-      assert.match(String(output), /\[REDACTED_SECRET\]/);
-      assert.doesNotMatch(String(output), /synthetic|canary|secret/);
-    }
-  } finally { state.config = previousConfig; clearAllSessionStates(); }
-});
+    const previousConfig = state.config;
+    state.config = { publicKey: "pk_test", secretKey: "sk_test", host: "https://example.invalid",
+      capturePolicy: createCapturePolicy({ LANGFUSE_PRIVACY_PRESET: "full-debug" }) };
+    try {
+      const root = new FakeObservation();
+      const attempt = new FakeObservation();
+      state.agentState = { ...makeAgentState(root), activeAttempt: attempt };
+      const message = { role: "assistant", stopReason: "stop", content: [{ type: "text", text }] };
+      await startGeneration({ payload: {} });
+      await finishGenerationFromMessage({ message });
+      finishAgentAttempt({ messages: [message] });
+      for (const output of [attempt.children[0].updates.at(-1)?.output, attempt.updates.at(-1)?.output]) {
+        assert.equal(typeof output, "string");
+        assert.match(String(output), /\[REDACTED_SECRET\]/);
+        assert.doesNotMatch(String(output), /synthetic|canary|secret/);
+        if (expected !== undefined) assert.equal(output, expected);
+      }
+    } finally { state.config = previousConfig; clearAllSessionStates(); }
+  });
+}
 
 test("metadata-only generation errors mask quoted credentials and boundary tokens", async () => {
   clearAllSessionStates();
@@ -112,6 +96,8 @@ test("metadata-only generation errors mask quoted credentials and boundary token
       "PASSWORD='synthetic-quoted-canary'",
       String.raw`API_KEY=\"synthetic quoted canary\"`,
       String.raw`PASSWORD=\'synthetic quoted canary\'`,
+      JSON.stringify(JSON.stringify({ password: "synthetic-nested-canary" })),
+      JSON.stringify(JSON.stringify({ message: 'provider said "invalid request: {"password":"synthetic-nested-canary"}' })),
       "x".repeat(11987) + " ghp_abcdefghijklmnopqrstuvwxyz123456",
     ]) {
       const root = new FakeObservation();
