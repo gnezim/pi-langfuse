@@ -79,6 +79,28 @@ test("assistant JSON credentials stay masked in generation and attempt output", 
   }
 });
 
+test("serialized quoted assignments cannot leak through generation and attempt output", async () => {
+  clearAllSessionStates();
+  const previousConfig = state.config;
+  state.config = { publicKey: "pk_test", secretKey: "sk_test", host: "https://example.invalid",
+    capturePolicy: createCapturePolicy({ LANGFUSE_PRIVACY_PRESET: "full-debug" }) };
+  try {
+    const root = new FakeObservation();
+    const attempt = new FakeObservation();
+    state.agentState = { ...makeAgentState(root), activeAttempt: attempt };
+    const message = { role: "assistant", stopReason: "stop", content: [{ type: "text",
+      text: JSON.stringify({ message: 'API_KEY="synthetic canary secret"' }) }] };
+    await startGeneration({ payload: {} });
+    await finishGenerationFromMessage({ message });
+    finishAgentAttempt({ messages: [message] });
+    for (const output of [attempt.children[0].updates.at(-1)?.output, attempt.updates.at(-1)?.output]) {
+      assert.equal(typeof output, "string");
+      assert.match(String(output), /\[REDACTED_SECRET\]/);
+      assert.doesNotMatch(String(output), /synthetic|canary|secret/);
+    }
+  } finally { state.config = previousConfig; clearAllSessionStates(); }
+});
+
 test("metadata-only generation errors mask quoted credentials and boundary tokens", async () => {
   clearAllSessionStates();
   const previousConfig = state.config;
@@ -88,6 +110,8 @@ test("metadata-only generation errors mask quoted credentials and boundary token
     for (const errorMessage of [
       'API_KEY="synthetic-quoted-canary"',
       "PASSWORD='synthetic-quoted-canary'",
+      String.raw`API_KEY=\"synthetic quoted canary\"`,
+      String.raw`PASSWORD=\'synthetic quoted canary\'`,
       "x".repeat(11987) + " ghp_abcdefghijklmnopqrstuvwxyz123456",
     ]) {
       const root = new FakeObservation();
@@ -97,7 +121,7 @@ test("metadata-only generation errors mask quoted credentials and boundary token
       const update = root.children[0].updates.at(-1)!;
       assert.equal(update.level, "ERROR");
       assert.equal(update.output, undefined);
-      assert.doesNotMatch(update.statusMessage!, /synthetic-quoted-canary|ghp_/);
+      assert.doesNotMatch(update.statusMessage!, /synthetic|canary|ghp_/);
     }
   } finally { state.config = previousConfig; clearAllSessionStates(); }
 });
